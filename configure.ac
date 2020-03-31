@@ -140,6 +140,9 @@ case "$host" in
 *** with the assembler. Use --enable-hardware-acceleration to enable it.
 *** ]])
   ;;
+  *os2*)
+    have_os2=yes
+  ;;
   *)
     have_elf=yes
   ;;
@@ -149,6 +152,7 @@ AM_CONDITIONAL(ANDROID, test "$have_android" = yes)
 AM_CONDITIONAL(WINDOWS, test "$have_win" = yes)
 AM_CONDITIONAL(MACOSX, test "$have_macosx" = yes)
 AM_CONDITIONAL(ELF, test "$have_elf" = yes)
+AM_CONDITIONAL(OS2, test "$have_os2" = yes)
 
 dnl Hardware Acceleration
 AC_ARG_ENABLE(hardware-acceleration,
@@ -705,6 +709,9 @@ AC_ARG_WITH(unbound-root-key-file, AS_HELP_STRING([--with-unbound-root-key-file]
 if test "$have_win" = yes; then
     unbound_root_key_file="C:\\Program Files\\Unbound\\root.key"
 else
+  if test "$have_os2" = yes; then
+    unbound_root_key_file="/@unixroot/etc/unbound/root.key"
+  else
     if test -f /var/lib/unbound/root.key;then
 	unbound_root_key_file="/var/lib/unbound/root.key"
     else
@@ -714,13 +721,18 @@ else
             unbound_root_key_file="/etc/unbound/root.key"
         fi
     fi
+  fi
 fi
 )
 
 AC_DEFINE_UNQUOTED([UNBOUND_ROOT_KEY_FILE],
   ["$unbound_root_key_file"], [The DNSSEC root key file])
 
+if test "$have_os2" = yes; then
+system_config_file="/@unixroot/etc/gnutls/config"
+else
 system_config_file="/etc/gnutls/config"
+fi
 AC_ARG_WITH(system-priority-file, AS_HELP_STRING([--with-system-priority-file],
                                  [specify the system-wide config file (set empty to disable)]),
             system_config_file="$withval"
@@ -894,7 +906,7 @@ AC_ARG_WITH([default-trust-store-file],
     /usr/local/share/certs/ca-root-nss.crt \
     /etc/ssl/cert.pem
     do
-    if test -e "$i"; then
+    if test -e "/@unixroot$i" || test -e "$i"; then
       with_default_trust_store_file="$i"
       break
     fi
