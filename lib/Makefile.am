@@ -145,6 +145,9 @@ libgnutls_la_SOURCES = $(HFILES) $(COBJECTS) $(SRP_COBJECTS)	\
 
 libgnutls_la_LDFLAGS = -no-undefined \
 	-version-info $(LT_CURRENT):$(LT_REVISION):$(LT_AGE) $(COMMON_LINK_FLAGS)
+if OS2
+libgnutls_la_LDFLAGS +=	-shortname gtls
+endif
 
 libgnutls_la_LIBADD = ../gl/libgnu.la x509/libgnutls_x509.la \
 	ext/libgnutls_ext.la \
@@ -233,6 +236,9 @@ libgnutlsxx_la_SOURCES = gnutlsxx.cpp
 
 libgnutlsxx_la_LDFLAGS = -no-undefined \
 	-version-info $(CXX_LT_CURRENT):$(CXX_LT_REVISION):$(CXX_LT_AGE)
+if OS2
+libgnutlsxx_la_LDFLAGS += -shortname gtlsxx
+endif
 
 libgnutlsxx_la_LIBADD = libgnutls.la
 
