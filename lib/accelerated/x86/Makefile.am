@@ -97,4 +97,11 @@ libx86_la_SOURCES += $(X86_PADLOCK_FILES_ELF)
 endif
 endif
 
+if OS2
+libx86_la_SOURCES += $(X86_FILES_OS2)
+if ENABLE_PADLOCK
+libx86_la_SOURCES += $(X86_PADLOCK_FILES_OS2)
+endif
+endif
+
 endif #ASM_X86_64
