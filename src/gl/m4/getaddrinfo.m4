@@ -34,6 +34,9 @@ AC_DEFUN([gl_GETADDRINFO],
 #ifdef HAVE_NETDB_H
 #include <netdb.h>
 #endif
+#ifdef __OS2__
+#include <libcx/net.h>
+#endif
 #include <stddef.h>
 ]], [[getaddrinfo("", "", NULL, NULL);]])],
       [gl_cv_func_getaddrinfo=yes],
@@ -71,6 +74,9 @@ AC_DEFUN([gl_GETADDRINFO],
 #ifdef HAVE_NETDB_H
 #include <netdb.h>
 #endif
+#ifdef __OS2__
+#include <libcx/net.h>
+#endif
 #ifdef HAVE_WS2TCPIP_H
 #include <ws2tcpip.h>
 #endif
@@ -100,6 +106,9 @@ AC_DEFUN([gl_GETADDRINFO],
 #endif
 #ifdef HAVE_NETDB_H
 #include <netdb.h>
+#endif
+#ifdef __OS2__
+#include <libcx/net.h>
 #endif
 #ifdef HAVE_WS2TCPIP_H
 #include <ws2tcpip.h>
@@ -156,6 +165,9 @@ AC_DEFUN([gl_PREREQ_GETADDRINFO], [
 #ifdef HAVE_NETDB_H
 #include <netdb.h>
 #endif
+#ifdef __OS2__
+#include <libcx/net.h>
+#endif
 #ifdef HAVE_WS2TCPIP_H
 #include <ws2tcpip.h>
 #endif
@@ -180,6 +192,9 @@ AC_DEFUN([gl_PREREQ_GETADDRINFO], [
 #endif
 #ifdef HAVE_NETDB_H
 #include <netdb.h>
+#endif
+#ifdef __OS2__
+#include <libcx/net.h>
 #endif
 #ifdef HAVE_WS2TCPIP_H
 #include <ws2tcpip.h>
