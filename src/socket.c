@@ -25,6 +25,9 @@
 #elif HAVE_WS2TCPIP_H
 #include <ws2tcpip.h>
 #endif
+#ifdef __OS2__
+#include <libcx/net.h>
+#endif
 #include <netdb.h>
 #include <string.h>
 #include <errno.h>

@@ -26,6 +26,9 @@
 
 #include <config.h>
 
+#ifdef __OS2__
+#include <libcx/net.h>
+#endif
 #include "common.h"
 #include "serv-args.h"
 #include <stdio.h>

@@ -36,6 +36,9 @@ OTHER DEALINGS IN THE SOFTWARE.
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#ifdef __OS2__
+#include <libcx/net.h>
+#endif
 
 #include "crypto-gnutls.h"
 
