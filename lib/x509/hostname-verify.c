@@ -174,6 +174,7 @@ gnutls_x509_crt_check_hostname2(gnutls_x509_crt_t cert,
 	if (!(flags & GNUTLS_VERIFY_DO_NOT_ALLOW_IP_MATCHES) &&
 	    ((p=strchr(hostname, ':')) != NULL || inet_pton(AF_INET, hostname, &ipv4) != 0)) {
 
+#ifdef HAVE_IPV6
 		if (p != NULL) {
 			struct in6_addr ipv6;
 
@@ -184,8 +185,11 @@ gnutls_x509_crt_check_hostname2(gnutls_x509_crt_t cert,
 			}
 			ret = check_ip(cert, &ipv6, 16);
 		} else {
+#endif
 			ret = check_ip(cert, &ipv4, 4);
+#ifdef HAVE_IPV6
 		}
+#endif
 
 		/* Prior to 3.6.0 we were accepting misconfigured servers, that place their IP
 		 * in the DNS field of subjectAlternativeName. That is no longer the case. */
