@@ -108,7 +108,13 @@ AC_DEFUN([INVOKE_LIBOPTS_MACROS_FIRST],[
   [while :
   do
       test -x "$POSIX_SHELL" && break
+      case "$host_os" in
+      os2*)
+      ;;
+      *)
       POSIX_SHELL=`which bash`
+      ;;
+      esac
       test -x "$POSIX_SHELL" && break
       POSIX_SHELL=`which dash`
       test -x "$POSIX_SHELL" && break
