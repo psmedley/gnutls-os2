@@ -29,7 +29,9 @@ int
 main (int argc, char *argv[])
 {
   ASSERT (getdtablesize () >= 3);
+#ifndef __OS2__
   ASSERT (dup2 (0, getdtablesize() - 1) == getdtablesize () - 1);
+#endif
   ASSERT (dup2 (0, getdtablesize()) == -1);
 
   return 0;
