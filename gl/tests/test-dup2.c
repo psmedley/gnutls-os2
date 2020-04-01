@@ -161,11 +161,13 @@ main (void)
       ASSERT (close (255) == 0);
       ASSERT (close (256) == 0);
     }
+#ifndef __OS2__
   ASSERT (dup2 (fd, bad_fd - 1) == bad_fd - 1);
   ASSERT (close (bad_fd - 1) == 0);
+#endif
   errno = 0;
   ASSERT (dup2 (fd, bad_fd) == -1);
-  ASSERT (errno == EBADF);
+  ASSERT (errno == EBADF || errno == EINVAL);
 
   /* Using dup2 can skip fds.  */
   ASSERT (dup2 (fd, fd + 2) == fd + 2);
