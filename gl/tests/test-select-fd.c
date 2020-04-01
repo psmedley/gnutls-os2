@@ -51,6 +51,7 @@ main (int argc, char *argv[])
                   ret = (mode == 'r'
                          ? select (fd + 1, &fds, NULL, NULL, &timeout)
                          : select (fd + 1, NULL, &fds, NULL, &timeout));
+printf("bww trace fd: %i, ret: %i, error: %i (%s)\n", fd, ret, errno, strerror(errno));
                   if (ret < 0)
                     {
                       perror ("select failed");

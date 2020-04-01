@@ -1049,7 +1049,11 @@ EXTRA_libtests_a_SOURCES += select.c
 
 ## begin gnulib module select-tests
 
+if OS2
+TESTS += test-select
+else
 TESTS += test-select test-select-in.sh test-select-out.sh
+endif
 # test-select-stdin has to be run by hand.
 check_PROGRAMS += test-select test-select-fd test-select-stdin
 test_select_LDADD = $(LDADD) @LIB_SELECT@ @LIBSOCKET@ $(INET_PTON_LIB)
