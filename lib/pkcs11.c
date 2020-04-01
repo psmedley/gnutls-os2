@@ -887,7 +887,11 @@ static void compat_load(const char *configfile)
 	const char *library;
 
 	if (configfile == NULL)
+#ifdef __OS2__
+		configfile = "/@unixroot/etc/gnutls/pkcs11.conf";
+#else
 		configfile = "/etc/gnutls/pkcs11.conf";
+#endif
 
 	fp = fopen(configfile, "r");
 	if (fp == NULL) {

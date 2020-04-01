@@ -374,8 +374,13 @@ verify_passwd(const char *conffile, const char *tpasswd,
 
 }
 
+#ifdef __OS2__
+#define KPASSWD "/@unixroot/etc/tpasswd"
+#define KPASSWD_CONF "/@unixroot/etc/tpasswd.conf"
+#else
 #define KPASSWD "/etc/tpasswd"
 #define KPASSWD_CONF "/etc/tpasswd.conf"
+#endif
 
 static void tls_log_func(int level, const char *str)
 {
