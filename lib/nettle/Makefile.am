@@ -59,7 +59,11 @@ else
 if HAVE_KERN_ARND
 libcrypto_la_SOURCES += sysrng-netbsd.c
 else
+if OS2
+libcrypto_la_SOURCES += sysrng-os2.c
+else
 libcrypto_la_SOURCES += sysrng-linux.c
+endif
 endif
 endif
 endif
