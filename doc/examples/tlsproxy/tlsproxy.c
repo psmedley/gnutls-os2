@@ -28,6 +28,9 @@ OTHER DEALINGS IN THE SOFTWARE.
 
 #include <errno.h>
 #include <getopt.h>
+#ifdef __OS2__
+#include <libcx/net.h>
+#endif
 #include <netdb.h>
 #include <signal.h>
 #include <stdio.h>
@@ -36,9 +39,6 @@ OTHER DEALINGS IN THE SOFTWARE.
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <unistd.h>
-#ifdef __OS2__
-#include <libcx/net.h>
-#endif
 
 #include "crypto-gnutls.h"
 
