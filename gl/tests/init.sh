@@ -71,11 +71,18 @@ if test "${PATH_SEPARATOR+set}" != set; then
   # Determine PATH_SEPARATOR by trying to find /bin/sh in a PATH which
   # contains only /bin. Note that ksh looks also at the FPATH variable,
   # so we have to set that as well for the test.
+  case `(uname -o) 2>/dev/null` in
+  OS/2)
+  PATH_SEPARATOR=';'
+  ;;
+  *)
   PATH_SEPARATOR=:
   (PATH='/bin;/bin'; FPATH=$PATH; sh -c :) >/dev/null 2>&1 \
     && { (PATH='/bin:/bin'; FPATH=$PATH; sh -c :) >/dev/null 2>&1 \
            || PATH_SEPARATOR=';'
        }
+  ;;
+  esac
 fi
 
 # We use a trap below for cleanup.  This requires us to go through
@@ -186,7 +193,7 @@ else
 
   # Search for a shell that meets our requirements.
   for re_shell_ in __current__ "${CONFIG_SHELL:-no_shell}" \
-      /bin/sh bash dash zsh pdksh fail
+      /bin/sh dash zsh pdksh fail
   do
     test "$re_shell_" = no_shell && continue
 
