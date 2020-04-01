@@ -84,8 +84,13 @@ AM_CFLAGS =
 noinst_LTLIBRARIES += libgnu_gpl.la
 
 libgnu_gpl_la_SOURCES =
+if !OS2
 libgnu_gpl_la_LIBADD = $(ggl_LTLIBOBJS)
 libgnu_gpl_la_DEPENDENCIES = $(ggl_LTLIBOBJS)
+else
+libgnu_gpl_la_LIBADD = time_rz.lo timegm.lo mktime.lo setenv.lo
+libgnu_gpl_la_DEPENDENCIES = time_rz.lo timegm.lo mktime.lo setenv.lo
+endif
 EXTRA_libgnu_gpl_la_SOURCES =
 libgnu_gpl_la_LDFLAGS = $(AM_LDFLAGS)
 libgnu_gpl_la_LDFLAGS += -no-undefined
@@ -198,7 +203,9 @@ EXTRA_libgnu_gpl_la_SOURCES += bind.c
 
 ## begin gnulib module c-ctype
 
+if !OS2
 libgnu_gpl_la_SOURCES += c-ctype.h c-ctype.c
+endif
 
 ## end   gnulib module c-ctype
 
@@ -734,9 +741,11 @@ libgnu_gpl_la_SOURCES += progname.h progname.c
 
 ## begin gnulib module read-file
 
+if !OS2
 libgnu_gpl_la_SOURCES += read-file.c
 
 EXTRA_DIST += read-file.h
+endif
 
 ## end   gnulib module read-file
 
@@ -945,9 +954,11 @@ EXTRA_DIST += w32sock.h
 
 ## begin gnulib module stat-time
 
+if !OS2
 libgnu_gpl_la_SOURCES += stat-time.c
 
 EXTRA_DIST += stat-time.h
+endif
 
 ## end   gnulib module stat-time
 
@@ -2094,7 +2105,9 @@ EXTRA_DIST += xalloc-oversized.h
 
 ## begin gnulib module xsize
 
+if !OS2
 libgnu_gpl_la_SOURCES += xsize.h xsize.c
+endif
 
 ## end   gnulib module xsize
 

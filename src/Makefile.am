@@ -201,7 +201,7 @@ libcmd_certtool_la_SOURCES = certtool-args.def \
 nodist_libcmd_certtool_la_SOURCES = certtool-args.c certtool-args.h
 libcmd_certtool_la_LIBADD = ../lib/libgnutls.la gl/libgnu_gpl.la ../gl/libgnu.la 
 libcmd_certtool_la_LIBADD += $(COMMON_LIBS)
-libcmd_certtool_la_LIBADD += $(LTLIBREADLINE) gl/libgnu_gpl.la
+libcmd_certtool_la_LIBADD += $(LTLIBREADLINE) 
 libcmd_certtool_la_LIBADD += $(INET_PTON_LIB) $(LIB_CLOCK_GETTIME)
 
 
