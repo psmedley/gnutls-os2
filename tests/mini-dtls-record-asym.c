@@ -33,6 +33,9 @@
 #include <gnutls/dtls.h>
 #include <signal.h>
 #include <unistd.h>
+#ifdef __OS2__
+#include <sys/time.h>
+#endif
 #include "utils.h"
 
 #ifdef _WIN32

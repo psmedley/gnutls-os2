@@ -36,6 +36,9 @@
 # include <sys/types.h>
 # include <sys/socket.h>
 #endif
+#ifdef __OS2__
+#include <sys/time.h>
+#endif
 #include "utils.h"
 
 #define SERVER_MTU  500

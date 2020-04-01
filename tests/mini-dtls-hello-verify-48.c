@@ -54,6 +54,9 @@ int main()
 #include <signal.h>
 #include <gnutls/gnutls.h>
 #include <gnutls/dtls.h>
+#ifdef __OS2__
+#include <sys/time.h>
+#endif
 
 #include "utils.h"
 
