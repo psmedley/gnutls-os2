@@ -455,12 +455,16 @@ test_function (select_fn my_select)
   test (test_tty, "TTY", my_select);
 #endif
 
+#ifndef __OS2__ //this test should be fixed in a next libcx version
   result += test (test_bad_nfd, my_select, "Invalid nfd test");
+#endif
   result += test (test_bad_fd, my_select, "Invalid fd test");
   result += test (test_connect_first, my_select, "Unconnected socket test");
   result += test (test_socket_pair, my_select, "Connected sockets test");
   result += test (test_accept_first, my_select, "General socket test with fork");
+#ifndef __OS2__ //we don't have select on pipes
   result += test (test_pipe, my_select, "Pipe test");
+#endif
 
   return result;
 }
