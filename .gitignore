@@ -21,6 +21,7 @@ doc/latex/Makefile.in
 doc/manpages/Makefile.in
 doc/reference/Makefile.in
 doc/scripts/Makefile.in
+doc/gnutls.info*
 extra/Makefile.in
 extra/includes/Makefile.in
 fuzz/Makefile.in
