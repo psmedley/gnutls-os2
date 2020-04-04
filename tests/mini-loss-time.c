@@ -28,7 +28,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(__OS2__)
 
 int main()
 {

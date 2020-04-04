@@ -56,7 +56,11 @@ static unsigned pin_called = 0;
 static const char *_pin = "1234";
 
 # include <dlfcn.h>
+#ifdef __OS2__
+# define P11LIB "pkcs11m1.dll"
+#else
 # define P11LIB "libpkcs11mock1.so"
+#endif
 
 
 static void tls_log_func(int level, const char *str)
@@ -99,7 +103,11 @@ void doit(void)
 			exit(1);
 		}
 
+#ifdef __OS2__
+		pflags = dlsym(dl, "_pkcs11_mock_flags");
+#else
 		pflags = dlsym(dl, "pkcs11_mock_flags");
+#endif
 		if (pflags == NULL) {
 			fail("could find pkcs11_mock_flags\n");
 			exit(1);

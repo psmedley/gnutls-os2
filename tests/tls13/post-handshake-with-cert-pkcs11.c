@@ -70,7 +70,11 @@ static void client_log_func(int level, const char *str)
 
 #define MAX_BUF 1024
 
+#ifdef __OS2__
+#define P11LIB "pkcs11m2.dll"
+#else
 #define P11LIB "libpkcs11mock2.so"
+#endif
 
 #define PIN "1234"
 

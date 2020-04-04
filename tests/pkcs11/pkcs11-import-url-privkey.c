@@ -47,6 +47,9 @@
 
 #ifdef _WIN32
 # define P11LIB "libpkcs11mock1.dll"
+#elif defined(__OS2__)
+# include <dlfcn.h>
+# define P11LIB "pkcs11m1.dll"
 #else
 # include <dlfcn.h>
 # define P11LIB "libpkcs11mock1.so"
@@ -104,7 +107,11 @@ void doit(void)
 			exit(1);
 		}
 
+#ifdef __OS2__
+		pflags = dlsym(dl, "_pkcs11_mock_flags");
+#else
 		pflags = dlsym(dl, "pkcs11_mock_flags");
+#endif
 		if (pflags == NULL) {
 			fail("could find pkcs11_mock_flags\n");
 			exit(1);

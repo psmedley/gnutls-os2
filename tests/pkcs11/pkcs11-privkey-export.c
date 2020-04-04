@@ -41,6 +41,9 @@
 #define PIN "1234"
 #ifdef _WIN32
 # define P11LIB "libpkcs11mock1.dll"
+#elif defined(__OS2__)
+# include <dlfcn.h>
+# define P11LIB "pkcs11m1.dll"
 #else
 # include <dlfcn.h>
 # define P11LIB "libpkcs11mock1.so"

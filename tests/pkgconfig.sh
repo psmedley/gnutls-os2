@@ -52,7 +52,7 @@ if ! test -r ${top_builddir}/lib/gnutls.pc ;then
 	exit 1
 fi
 
-PKG_CONFIG_PATH=${top_builddir}/lib:$PKG_CONFIG_PATH
+PKG_CONFIG_PATH="${top_builddir}/lib;$PKG_CONFIG_PATH"
 export PKG_CONFIG_PATH
 
 set -e

@@ -40,6 +40,8 @@
 
 #ifdef _WIN32
 # define P11LIB "libpkcs11mock1.dll"
+#elif defined(__OS2__)
+# define P11LIB "pkcs11m1.dll"
 #else
 # define P11LIB "libpkcs11mock1.so"
 #endif
