@@ -20,9 +20,9 @@
 
 #set -e
 
-srcdir="${srcdir:-.}"
-CERTTOOL="${CERTTOOL:-../src/certtool${EXEEXT}}"
-DIFF="${DIFF:-diff -b -B}"
+: ${srcdir=.}
+: ${CERTTOOL=../src/certtool${EXEEXT}}
+: ${DIFF=diff -b -B}
 if ! test -z "${VALGRIND}"; then
 	VALGRIND="${LIBTOOL:-libtool} --mode=execute ${VALGRIND} --error-exitcode=15"
 fi
@@ -34,7 +34,7 @@ fi
 
 . ${srcdir}/scripts/common.sh
 
-check_for_datefudge
+skip_if_no_datefudge
 
 #try verification
 datefudge -s "2010-10-10" \

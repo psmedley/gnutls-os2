@@ -23,11 +23,14 @@
 #ifndef GNUTLS_TESTS_UTILS_H
 #define GNUTLS_TESTS_UTILS_H
 
+#include <assert.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <signal.h>
 #include <string.h>
 #include <stdarg.h>
+#include <unistd.h>
 #include <gnutls/gnutls.h>
 #include <gnutls/pkcs11.h>
 
@@ -41,12 +44,12 @@
 # error tests cannot be compiled with NDEBUG defined
 #endif
 
-#if _GNUTLS_GCC_VERSION >= 70100
-#define FALLTHROUGH      __attribute__ ((fallthrough))
-#endif
-
 #ifndef FALLTHROUGH
+#if _GNUTLS_GCC_VERSION >= 70100
+# define FALLTHROUGH      __attribute__ ((fallthrough))
+#else
 # define FALLTHROUGH
+#endif
 #endif
 
 /* number of elements within an array */
@@ -72,11 +75,11 @@ extern const char *pkcs3_3072;
     _fail("%s:%d: "format, __func__, __LINE__, ##__VA_ARGS__)
 
 extern void _fail(const char *format, ...)
-    __attribute__ ((format(printf, 1, 2)));
+	__attribute__ ((format(printf, 1, 2))) __attribute__((__noreturn__));
 extern void fail_ignore(const char *format, ...)
-    __attribute__ ((format(printf, 1, 2)));
+	__attribute__ ((format(printf, 1, 2))) __attribute__((__noreturn__));
 extern void success(const char *format, ...)
-    __attribute__ ((format(printf, 1, 2)));
+	__attribute__ ((format(printf, 1, 2)));
 
 /* assumes test_name is defined */
 #define test_fail(fmt, ...) \
@@ -144,6 +147,8 @@ char *get_tmpname(char s[TMPNAME_SIZE]);
 void track_temp_files(void);
 void delete_temp_files(void);
 
+int tcp_connect(const char* addr, unsigned port);
+
 /* This must be implemented elsewhere. */
 extern void doit(void);
 
@@ -158,7 +163,7 @@ inline static void _check_wait_status(int status, unsigned sigonly)
 		} else {
 			if (!sigonly) {
 				if (WEXITSTATUS(status) == 77)
-					exit(77);
+					_exit(77);
 				fail("Child died with status %d\n",
 				     WEXITSTATUS(status));
 			}
@@ -175,6 +180,34 @@ inline static void check_wait_status(int status)
 inline static void check_wait_status_for_sig(int status)
 {
 	_check_wait_status(status, 1);
+}
+
+inline static unsigned int get_timeout(void) {
+	const char *envvar;
+	unsigned long int ul;
+
+	envvar = getenv("GNUTLS_TEST_TIMEOUT");
+	if (!envvar || *envvar == '\0')
+		return 20 * 1000;
+
+	ul = strtoul(envvar, NULL, 10);
+	assert(ul <= UINT_MAX);
+
+	return (unsigned int) ul;
+}
+
+inline static unsigned int get_dtls_retransmit_timeout(void) {
+	const char *envvar;
+	unsigned long int ul;
+
+	envvar = getenv("GNUTLS_TEST_DTLS_RETRANSMIT_TIMEOUT");
+	if (!envvar || *envvar == '\0')
+		return get_timeout() / 10;
+
+	ul = strtoul(envvar, NULL, 10);
+	assert(ul <= UINT_MAX);
+
+	return (unsigned int) ul;
 }
 
 #endif /* GNUTLS_TESTS_UTILS_H */

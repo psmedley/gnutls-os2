@@ -1,0 +1,59 @@
+--- m4/iconv.m4	2018-07-13 14:43:27.000000000 +0930
++++ m4/iconv.m4	2023-02-10 00:32:47.000000000 +1030
+@@ -175,27 +189,36 @@
+ #endif
+   /* Test against HP-UX 11.11 bug: No converter from EUC-JP to UTF-8 is
+      provided.  */
+-  if (/* Try standardized names.  */
+-      iconv_open ("UTF-8", "EUC-JP") == (iconv_t)(-1)
+-      /* Try IRIX, OSF/1 names.  */
+-      && iconv_open ("UTF-8", "eucJP") == (iconv_t)(-1)
+-      /* Try AIX names.  */
+-      && iconv_open ("UTF-8", "IBM-eucJP") == (iconv_t)(-1)
+-      /* Try HP-UX names.  */
+-      && iconv_open ("utf8", "eucJP") == (iconv_t)(-1))
+-    result |= 16;
++  {
++    /* Try standardized names.  */
++    iconv_t cd1 = iconv_open ("UTF-8", "EUC-JP");
++    /* Try IRIX, OSF/1 names.  */
++    iconv_t cd2 = iconv_open ("UTF-8", "eucJP");
++    /* Try AIX names.  */
++    iconv_t cd3 = iconv_open ("UTF-8", "IBM-eucJP");
++    /* Try HP-UX names.  */
++    iconv_t cd4 = iconv_open ("utf8", "eucJP");
++    if (cd1 == (iconv_t)(-1) && cd2 == (iconv_t)(-1)
++        && cd3 == (iconv_t)(-1) && cd4 == (iconv_t)(-1))
++      result |= 16;
++    if (cd1 != (iconv_t)(-1))
++      iconv_close (cd1);
++    if (cd2 != (iconv_t)(-1))
++      iconv_close (cd2);
++    if (cd3 != (iconv_t)(-1))
++      iconv_close (cd3);
++    if (cd4 != (iconv_t)(-1))
++      iconv_close (cd4);
++  }
+   return result;
+-}]])],
+-        [am_cv_func_iconv_works=yes],
+-        [am_cv_func_iconv_works=no],
+-        [
+-changequote(,)dnl
+-         case "$host_os" in
+-           aix* | hpux*) am_cv_func_iconv_works="guessing no" ;;
+-           *)            am_cv_func_iconv_works="guessing yes" ;;
+-         esac
+-changequote([,])dnl
+-        ])
++]])],
++          [am_cv_func_iconv_works=yes], ,
++          [case "$host_os" in
++             aix* | hpux*) am_cv_func_iconv_works="guessing no" ;;
++             *)            am_cv_func_iconv_works="guessing yes" ;;
++           esac])
++        test "$am_cv_func_iconv_works" = no || break
++      done
+       LIBS="$am_save_LIBS"
+     ])
+     case "$am_cv_func_iconv_works" in

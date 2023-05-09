@@ -20,9 +20,9 @@
 # along with GnuTLS; if not, write to the Free Software Foundation,
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
 
-srcdir="${srcdir:-.}"
-SERV="${SERV:-../src/gnutls-serv${EXEEXT}}"
-CLI="${CLI:-../src/gnutls-cli${EXEEXT}}"
+: ${srcdir=.}
+: ${SERV=../src/gnutls-serv${EXEEXT}}
+: ${CLI=../src/gnutls-cli${EXEEXT}}
 unset RETCODE
 
 if ! test -x "${SERV}"; then
@@ -46,7 +46,7 @@ SERV="${SERV} -q"
 
 . "${srcdir}/scripts/common.sh"
 
-check_for_datefudge
+skip_if_no_datefudge
 
 echo "Checking whether server can utilize multiple keys"
 
@@ -60,8 +60,8 @@ CAFILE=${srcdir}/../doc/credentials/x509/ca.pem
 TMPFILE=outcert.$$.tmp
 
 eval "${GETPORT}"
-launch_server $$ --echo --priority "NORMAL:+ECDHE-RSA:+ECDHE-ECDSA" --x509keyfile ${KEY1} --x509certfile ${CERT1} \
-	--x509keyfile ${KEY2} --x509certfile ${CERT2} --x509keyfile ${KEY3} --x509certfile ${CERT3}
+launch_server --echo --priority "NORMAL:+ECDHE-RSA:+ECDHE-ECDSA" --x509keyfile ${KEY1} --x509certfile ${CERT1} \
+	--x509keyfile ${KEY2} --x509ecccertfile ${CERT2} --x509keyfile ${KEY3} --x509certfile ${CERT3}
 PID=$!
 wait_server ${PID}
 

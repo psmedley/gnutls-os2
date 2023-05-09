@@ -54,6 +54,9 @@
 #include <random.h>
 #include <xsize.h>
 #include "locks.h"
+#include "system/ktls.h"
+#include <intprops.h>
+
 
 struct tls_record_st {
 	uint16_t header_size;
@@ -288,7 +291,8 @@ int gnutls_bye(gnutls_session_t session, gnutls_close_request_t how)
 
 	switch (BYE_STATE) {
 	case BYE_STATE0:
-		ret = _gnutls_io_write_flush(session);
+		if (!IS_KTLS_ENABLED(session, GNUTLS_KTLS_SEND))
+			ret = _gnutls_io_write_flush(session);
 		BYE_STATE = BYE_STATE0;
 		if (ret < 0) {
 			gnutls_assert();
@@ -296,9 +300,8 @@ int gnutls_bye(gnutls_session_t session, gnutls_close_request_t how)
 		}
 		FALLTHROUGH;
 	case BYE_STATE1:
-		ret =
-		    gnutls_alert_send(session, GNUTLS_AL_WARNING,
-				      GNUTLS_A_CLOSE_NOTIFY);
+		ret = gnutls_alert_send(session, GNUTLS_AL_WARNING,
+				GNUTLS_A_CLOSE_NOTIFY);
 		BYE_STATE = BYE_STATE1;
 		if (ret < 0) {
 			gnutls_assert();
@@ -308,14 +311,22 @@ int gnutls_bye(gnutls_session_t session, gnutls_close_request_t how)
 	case BYE_STATE2:
 		BYE_STATE = BYE_STATE2;
 		if (how == GNUTLS_SHUT_RDWR) {
-			do {
-				ret =
-				    _gnutls_recv_int(session, GNUTLS_ALERT,
-						     NULL, 0, NULL,
-						     session->internals.
-						     record_timeout_ms);
+			if (IS_KTLS_ENABLED(session, GNUTLS_KTLS_SEND)){
+				do {
+					ret = _gnutls_ktls_recv_int(session,
+							GNUTLS_ALERT, NULL, 0);
+				}
+				while (ret == GNUTLS_E_GOT_APPLICATION_DATA);
+			} else {
+				do {
+					ret =
+						_gnutls_recv_int(session, GNUTLS_ALERT,
+								 NULL, 0, NULL,
+								 session->internals.
+								 record_timeout_ms);
+				}
+				while (ret == GNUTLS_E_GOT_APPLICATION_DATA);
 			}
-			while (ret == GNUTLS_E_GOT_APPLICATION_DATA);
 
 			if (ret >= 0)
 				session->internals.may_not_read = 1;
@@ -341,7 +352,7 @@ int gnutls_bye(gnutls_session_t session, gnutls_close_request_t how)
 
 inline static void session_unresumable(gnutls_session_t session)
 {
-	session->internals.resumable = RESUME_FALSE;
+	session->internals.resumable = false;
 }
 
 /* returns 0 if session is valid
@@ -367,6 +378,7 @@ copy_record_version(gnutls_session_t session,
 	lver = get_version(session);
 	if (session->internals.initial_negotiation_completed ||
 	    htype != GNUTLS_HANDSHAKE_CLIENT_HELLO ||
+	    (session->internals.hsk_flags & HSK_HRR_RECEIVED) ||
 	    session->internals.default_record_version[0] == 0) {
 
 		if (unlikely(lver == NULL))
@@ -2025,9 +2037,13 @@ gnutls_record_send2(gnutls_session_t session, const void *data,
 
 	switch(session->internals.rsend_state) {
 		case RECORD_SEND_NORMAL:
-			return _gnutls_send_tlen_int(session, GNUTLS_APPLICATION_DATA,
-						     -1, EPOCH_WRITE_CURRENT, data,
-						     data_size, pad, MBUFFER_FLUSH);
+			if (IS_KTLS_ENABLED(session, GNUTLS_KTLS_SEND)) {
+				return _gnutls_ktls_send(session, data, data_size);
+			} else {
+				return _gnutls_send_tlen_int(session, GNUTLS_APPLICATION_DATA,
+								 -1, EPOCH_WRITE_CURRENT, data,
+								 data_size, pad, MBUFFER_FLUSH);
+			}
 		case RECORD_SEND_CORKED:
 		case RECORD_SEND_CORKED_TO_KU:
 			return append_data_to_corked(session, data, data_size);
@@ -2097,6 +2113,10 @@ ssize_t gnutls_record_send_early_data(gnutls_session_t session,
 	if (session->security_parameters.entity != GNUTLS_CLIENT)
 		return gnutls_assert_val(GNUTLS_E_INVALID_REQUEST);
 
+	if (data_size == 0) {
+		return 0;
+	}
+
 	if (xsum(session->internals.
 		 early_data_presend_buffer.length,
 		 data_size) >
@@ -2110,6 +2130,102 @@ ssize_t gnutls_record_send_early_data(gnutls_session_t session,
 	if (ret < 0)
 		return gnutls_assert_val(ret);
 
+	session->internals.flags |= GNUTLS_ENABLE_EARLY_DATA;
+
+	return ret;
+}
+
+/**
+ * gnutls_record_send_file:
+ * @session: is a #gnutls_session_t type.
+ * @fd: file descriptor from which to read data.
+ * @offset: Is relative to file offset, denotes the starting location for
+ *          reading.  after function returns, it point to position following
+ *          last read byte.
+ * @count: is the length of the data in bytes to be read from file and send.
+ *
+ * This function sends data from @fd. If KTLS (kernel TLS) is enabled, it will
+ * use the sendfile() system call to avoid overhead of copying data between user
+ * space and the kernel. Otherwise, this functionality is merely emulated by
+ * calling read() and gnutls_record_send(). If this implementation is
+ * suboptimal, check whether KTLS is enabled using
+ * gnutls_transport_is_ktls_enabled().
+ *
+ * If @offset is NULL then file offset is incremented by number of bytes send,
+ * otherwise file offset remains unchanged.
+ *
+ * Returns: The number of bytes sent, or a negative error code.
+ **/
+ssize_t gnutls_record_send_file(gnutls_session_t session, int fd,
+				off_t *offset, size_t count)
+{
+	ssize_t ret;
+	size_t buf_len;
+	size_t sent = 0;
+	uint8_t *buf;
+	off_t saved_offset = 0;
+
+	if (IS_KTLS_ENABLED(session, GNUTLS_KTLS_SEND)) {
+		return _gnutls_ktls_send_file(session, fd, offset, count);
+	}
+
+	if (offset != NULL) {
+		saved_offset = lseek(fd, 0, SEEK_CUR);
+		if (saved_offset == (off_t)-1) {
+			return GNUTLS_E_FILE_ERROR;
+		}
+		if (lseek(fd, *offset, SEEK_CUR) == -1) {
+			return GNUTLS_E_FILE_ERROR;
+		}
+	}
+
+	buf_len = MIN(count, MAX(max_record_send_size(session, NULL), 512));
+
+	buf = gnutls_malloc(buf_len);
+	if (buf == NULL) {
+		gnutls_assert();
+		ret = GNUTLS_E_MEMORY_ERROR;
+		goto end;
+	}
+
+	while (sent < count) {
+		ret = read(fd, buf, MIN(buf_len, count - sent));
+		if (ret == 0) {
+			break;
+		} else if (ret == -1){
+			if (errno == EAGAIN) {
+				ret = GNUTLS_E_AGAIN;
+				goto end;
+			}
+			ret = GNUTLS_E_FILE_ERROR;
+			goto end;
+		}
+
+		ret = gnutls_record_send(session, buf, ret);
+		if (ret < 0) {
+			goto end;
+		}
+		if (INT_ADD_OVERFLOW(sent, ret)) {
+			gnutls_assert();
+			ret = GNUTLS_E_RECORD_OVERFLOW;
+			goto end;
+		}
+		sent += ret;
+	}
+
+	ret = sent;
+
+  end:
+	if (offset != NULL){
+		if (likely(!INT_ADD_OVERFLOW(*offset, sent))) {
+			*offset += sent;
+		} else {
+			gnutls_assert();
+			ret = GNUTLS_E_RECORD_OVERFLOW;
+		}
+		lseek(fd, saved_offset, SEEK_SET);
+	}
+	gnutls_free(buf);
 	return ret;
 }
 
@@ -2119,7 +2235,7 @@ ssize_t gnutls_record_send_early_data(gnutls_session_t session,
  * @data: the buffer that the data will be read into
  * @data_size: the number of requested bytes
  *
- * This function can be used by a searver to retrieve data sent early
+ * This function can be used by a server to retrieve data sent early
  * in the handshake processes when resuming a session.  This is used
  * to implement a zero-roundtrip (0-RTT) mode.  It has the same
  * semantics as gnutls_record_recv().
@@ -2286,9 +2402,13 @@ gnutls_record_recv(gnutls_session_t session, void *data, size_t data_size)
 			return gnutls_assert_val(GNUTLS_E_UNAVAILABLE_DURING_HANDSHAKE);
 	}
 
-	return _gnutls_recv_int(session, GNUTLS_APPLICATION_DATA,
-				data, data_size, NULL,
-				session->internals.record_timeout_ms);
+	if (IS_KTLS_ENABLED(session, GNUTLS_KTLS_RECV)) {
+		return _gnutls_ktls_recv(session, data, data_size);
+	} else {
+		return _gnutls_recv_int(session, GNUTLS_APPLICATION_DATA,
+					data, data_size, NULL,
+					session->internals.record_timeout_ms);
+	}
 }
 
 /**
@@ -2338,4 +2458,79 @@ gnutls_record_recv_seq(gnutls_session_t session, void *data,
 void gnutls_record_set_timeout(gnutls_session_t session, unsigned int ms)
 {
 	session->internals.record_timeout_ms = ms;
+}
+
+/**
+ * gnutls_handshake_write:
+ * @session: is a #gnutls_session_t type.
+ * @level: the current encryption level for reading a handshake message
+ * @data: the (const) handshake data to be processed
+ * @data_size: the size of data
+ *
+ * This function processes a handshake message in the encryption level
+ * specified with @level. Prior to calling this function, a handshake
+ * read callback must be set on @session. Use
+ * gnutls_handshake_set_read_function() to do this.
+ *
+ * Since: 3.7.0
+ */
+int
+gnutls_handshake_write(gnutls_session_t session,
+			gnutls_record_encryption_level_t level,
+			const void *data, size_t data_size)
+{
+	record_parameters_st *record_params;
+	record_state_st *record_state;
+	mbuffer_st *bufel;
+	uint8_t *p;
+	int ret;
+
+	/* DTLS is not supported */
+	if (IS_DTLS(session))
+		return gnutls_assert_val(GNUTLS_E_INVALID_REQUEST);
+
+	/* Nothing to do */
+	if (data_size == 0)
+		return gnutls_assert_val(0);
+
+	/* When using this, the outgoing handshake messages should
+	 * also be handled manually */
+	if (!session->internals.h_read_func)
+		return gnutls_assert_val(GNUTLS_E_INVALID_REQUEST);
+
+	if (session->internals.initial_negotiation_completed) {
+		const version_entry_st *vers = get_version(session);
+		if (unlikely(vers == NULL || !vers->tls13_sem))
+			return gnutls_assert_val(GNUTLS_E_INVALID_REQUEST);
+	}
+
+	ret = _gnutls_epoch_get(session, EPOCH_READ_CURRENT, &record_params);
+	if (ret < 0)
+		return gnutls_assert_val(ret);
+
+	record_state = &record_params->read;
+	if (record_state->level > level)
+		return gnutls_assert_val(GNUTLS_E_DECRYPTION_FAILED);
+
+	bufel = _mbuffer_alloc_align16(data_size, 0);
+	if (bufel == NULL)
+		return gnutls_assert_val(GNUTLS_E_MEMORY_ERROR);
+
+	memcpy(_mbuffer_get_udata_ptr(bufel), data, data_size);
+	_mbuffer_set_udata_size(bufel, data_size);
+	p = _mbuffer_get_udata_ptr(bufel);
+	bufel->htype = p[0];
+
+	if (sequence_increment(session, &record_state->sequence_number) != 0) {
+		_mbuffer_xfree(&bufel);
+		return gnutls_assert_val(GNUTLS_E_RECORD_LIMIT_REACHED);
+	}
+
+	_gnutls_record_buffer_put(session, GNUTLS_HANDSHAKE,
+				  record_state->sequence_number, bufel);
+
+	if (session->internals.initial_negotiation_completed)
+		return _gnutls13_recv_async_handshake(session);
+
+	return 0;
 }

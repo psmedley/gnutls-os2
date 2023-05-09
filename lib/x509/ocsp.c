@@ -38,16 +38,17 @@
 #include <auth/cert.h>
 
 #include <assert.h>
+#include "intprops.h"
 
 typedef struct gnutls_ocsp_req_int {
-	ASN1_TYPE req;
+	asn1_node req;
 	unsigned init;
 } gnutls_ocsp_req_int;
 
 typedef struct gnutls_ocsp_resp_int {
-	ASN1_TYPE resp;
+	asn1_node resp;
 	gnutls_datum_t response_type_oid;
-	ASN1_TYPE basicresp;
+	asn1_node basicresp;
 	gnutls_datum_t der;
 	unsigned init;
 } gnutls_ocsp_resp_int;
@@ -324,7 +325,7 @@ gnutls_ocsp_resp_import2(gnutls_ocsp_resp_t resp,
 	}
 #define OCSP_BASIC "1.3.6.1.5.5.7.48.1.1"
 
-	if (resp->response_type_oid.size == sizeof(OCSP_BASIC)
+	if (resp->response_type_oid.size == sizeof(OCSP_BASIC) - 1
 	    && memcmp(resp->response_type_oid.data, OCSP_BASIC,
 		      resp->response_type_oid.size) == 0) {
 
@@ -456,25 +457,12 @@ int gnutls_ocsp_resp_export2(gnutls_ocsp_resp_const_t resp, gnutls_datum_t * dat
  **/
 int gnutls_ocsp_req_get_version(gnutls_ocsp_req_const_t req)
 {
-	uint8_t version[8];
-	int len, ret;
-
 	if (req == NULL) {
 		gnutls_assert();
 		return GNUTLS_E_INVALID_REQUEST;
 	}
 
-	len = sizeof(version);
-	ret =
-	    asn1_read_value(req->req, "tbsRequest.version", version, &len);
-	if (ret != ASN1_SUCCESS) {
-		if (ret == ASN1_ELEMENT_NOT_FOUND)
-			return 1;	/* the DEFAULT version */
-		gnutls_assert();
-		return _gnutls_asn2err(ret);
-	}
-
-	return (int) version[0] + 1;
+	return _gnutls_x509_get_version(req->req, "tbsRequest.version");
 }
 
 /**
@@ -808,6 +796,8 @@ gnutls_ocsp_req_add_cert(gnutls_ocsp_req_t req,
  * The caller needs to deallocate memory by calling gnutls_free() on
  * @oid->data and @data->data.
  *
+ * Since 3.7.0 @oid->size does not account for the terminating null byte.
+ *
  * Returns: On success, %GNUTLS_E_SUCCESS (0) is returned, otherwise a
  *   negative error code is returned.  If you have reached the last
  *   extension available %GNUTLS_E_REQUESTED_DATA_NOT_AVAILABLE will
@@ -1101,6 +1091,9 @@ int gnutls_ocsp_resp_get_status(gnutls_ocsp_resp_const_t resp)
  * Otherwise gnutls_ocsp_resp_import() will decode the basic OCSP
  * response part and the caller need not worry about that aspect.
  *
+ * Since 3.7.0 @response_type_oid->size does not account for the terminating
+ * null byte.
+ *
  * Returns: On success, %GNUTLS_E_SUCCESS (0) is returned, otherwise a
  *   negative error value.
  **/
@@ -1153,26 +1146,12 @@ gnutls_ocsp_resp_get_response(gnutls_ocsp_resp_const_t resp,
  **/
 int gnutls_ocsp_resp_get_version(gnutls_ocsp_resp_const_t resp)
 {
-	uint8_t version[8];
-	int len, ret;
-
 	if (resp == NULL) {
 		gnutls_assert();
 		return GNUTLS_E_INVALID_REQUEST;
 	}
 
-	len = sizeof(version);
-	ret =
-	    asn1_read_value(resp->resp, "tbsResponseData.version", version,
-			    &len);
-	if (ret != ASN1_SUCCESS) {
-		if (ret == ASN1_ELEMENT_NOT_FOUND)
-			return 1;	/* the DEFAULT version */
-		gnutls_assert();
-		return _gnutls_asn2err(ret);
-	}
-
-	return (int) version[0] + 1;
+	return _gnutls_x509_get_version(resp->resp, "tbsResponseData.version");
 }
 
 /**
@@ -1696,6 +1675,8 @@ gnutls_ocsp_resp_get_single(gnutls_ocsp_resp_const_t resp,
  * The caller needs to deallocate memory by calling gnutls_free() on
  * @oid->data and @data->data.
  *
+ * Since 3.7.0 @oid->size does not account for the terminating null byte.
+ *
  * Returns: On success, %GNUTLS_E_SUCCESS (0) is returned, otherwise a
  *   negative error code is returned.  If you have reached the last
  *   extension available %GNUTLS_E_REQUESTED_DATA_NOT_AVAILABLE will
@@ -1925,9 +1906,13 @@ gnutls_ocsp_resp_get_certs(gnutls_ocsp_resp_const_t resp,
 			goto error;
 		}
 
-		tmpcerts2 =
-		    gnutls_realloc_fast(tmpcerts,
-					(ctr + 2) * sizeof(*tmpcerts));
+		if (unlikely(INT_ADD_OVERFLOW(ctr, 2))) {
+			ret = gnutls_assert_val(GNUTLS_E_MEMORY_ERROR);
+			goto error;
+		}
+
+		tmpcerts2 = _gnutls_reallocarray_fast(tmpcerts, ctr + 2,
+						      sizeof(*tmpcerts));
 		if (tmpcerts2 == NULL) {
 			gnutls_assert();
 			ret = GNUTLS_E_MEMORY_ERROR;
@@ -2130,7 +2115,7 @@ _ocsp_resp_verify_direct(gnutls_ocsp_resp_const_t resp,
 		goto done;
 	}
 
-	_gnutls_cert_log("ocsp signer", signercert); \
+	_gnutls_cert_log("ocsp signer", signercert);
 
 	rc = gnutls_pubkey_import_x509(pubkey, signercert, 0);
 	if (rc != GNUTLS_E_SUCCESS) {
@@ -2389,15 +2374,15 @@ gnutls_ocsp_resp_verify(gnutls_ocsp_resp_const_t resp,
 				rc = GNUTLS_E_SUCCESS;
 				goto done;
 			}
-		}
-	}
 
-	rc = check_ocsp_purpose(signercert);
-	if (rc < 0) {
-		gnutls_assert();
-		*verify = GNUTLS_OCSP_VERIFY_SIGNER_KEYUSAGE_ERROR;
-		rc = GNUTLS_E_SUCCESS;
-		goto done;
+			rc = check_ocsp_purpose(signercert);
+			if (rc < 0) {
+				gnutls_assert();
+				*verify = GNUTLS_OCSP_VERIFY_SIGNER_KEYUSAGE_ERROR;
+				rc = GNUTLS_E_SUCCESS;
+				goto done;
+			}
+		}
 	}
 
 	rc = _ocsp_resp_verify_direct(resp, signercert, verify, flags);
@@ -2478,7 +2463,14 @@ gnutls_ocsp_resp_list_import2(gnutls_ocsp_resp_t **ocsps,
 				goto fail;
 			}
 
-			new_ocsps = gnutls_realloc(*ocsps, (*size + 1)*sizeof(gnutls_ocsp_resp_t));
+			if (unlikely(INT_ADD_OVERFLOW(*size, 1))) {
+				ret = gnutls_assert_val(GNUTLS_E_MEMORY_ERROR);
+				goto fail;
+			}
+
+			new_ocsps = _gnutls_reallocarray(*ocsps,
+							 *size + 1,
+							 sizeof(gnutls_ocsp_resp_t));
 			if (new_ocsps == NULL) {
 				resp = NULL;
 				gnutls_assert();
@@ -2512,7 +2504,7 @@ gnutls_ocsp_resp_list_import2(gnutls_ocsp_resp_t **ocsps,
 			goto cleanup;
 		}
 
-		*ocsps = gnutls_malloc(1*sizeof(gnutls_ocsp_resp_t));
+		*ocsps = gnutls_malloc(sizeof(gnutls_ocsp_resp_t));
 		if (*ocsps == NULL) {
 			gnutls_assert();
 			ret = GNUTLS_E_MEMORY_ERROR;

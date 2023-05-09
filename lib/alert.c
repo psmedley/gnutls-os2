@@ -25,6 +25,7 @@
 #include <record.h>
 #include <debug.h>
 #include "str.h"
+#include <system/ktls.h>
 
 typedef struct {
 	gnutls_alert_description_t alert;
@@ -165,13 +166,32 @@ gnutls_alert_send(gnutls_session_t session, gnutls_alert_level_t level,
 	_gnutls_record_log("REC: Sending Alert[%d|%d] - %s\n", data[0],
 			   data[1], name);
 
-	if ((ret =
-	     _gnutls_send_int(session, GNUTLS_ALERT, -1,
-			      EPOCH_WRITE_CURRENT, data, 2,
-			      MBUFFER_FLUSH)) >= 0)
-		return 0;
-	else
+	if (session->internals.alert_read_func) {
+		record_parameters_st *params;
+
+		ret = _gnutls_epoch_get(session, EPOCH_WRITE_CURRENT, &params);
+		if (ret < 0)
+			return gnutls_assert_val(ret);
+		ret = session->internals.alert_read_func(session,
+						     params->write.level,
+						     level,
+						     desc);
+		if (ret < 0)
+			return gnutls_assert_val(ret);
+
 		return ret;
+	}
+
+	if (IS_KTLS_ENABLED(session, GNUTLS_KTLS_SEND)) {
+		ret =
+			_gnutls_ktls_send_control_msg(session, GNUTLS_ALERT, data, 2);
+	} else {
+		ret =
+			_gnutls_send_int(session, GNUTLS_ALERT, -1,
+				EPOCH_WRITE_CURRENT, data, 2,
+				MBUFFER_FLUSH);
+	}
+	return (ret < 0) ? ret : 0;
 }
 
 /**

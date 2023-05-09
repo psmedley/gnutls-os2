@@ -75,6 +75,22 @@ typedef struct {
 	int (*exists) (gnutls_digest_algorithm_t);
 } gnutls_crypto_digest_st;
 
+typedef struct {
+	int (*hkdf_extract) (gnutls_mac_algorithm_t,
+			     const void *key, size_t keysize,
+			     const void *salt, size_t saltsize,
+			     void *output);
+	int (*hkdf_expand) (gnutls_mac_algorithm_t,
+			    const void *key, size_t keysize,
+			    const void *info, size_t infosize,
+			    void *output, size_t length);
+	int (*pbkdf2) (gnutls_mac_algorithm_t,
+		       const void *key, size_t keysize,
+		       const void *salt, size_t saltsize,
+		       unsigned iter_count,
+		       void *output, size_t length);
+} gnutls_crypto_kdf_st;
+
 typedef struct gnutls_crypto_rnd {
 	int (*init) (void **ctx); /* called prior to first usage of randomness */
 	int (*rnd) (void *ctx, int level, void *data, size_t datasize);
@@ -227,7 +243,8 @@ typedef struct {
 typedef enum {
 	GNUTLS_PK_FLAG_NONE = 0,
 	GNUTLS_PK_FLAG_PROVABLE = 1,
-	GNUTLS_PK_FLAG_REPRODUCIBLE = 2
+	GNUTLS_PK_FLAG_REPRODUCIBLE = 2,
+	GNUTLS_PK_FLAG_RSA_PSS_FIXED_SALT_LENGTH = 4
 } gnutls_pk_flag_t;
 
 #define FIX_SIGN_PARAMS(params, flags, dig) do {		\
@@ -401,6 +418,8 @@ typedef struct gnutls_crypto_pk {
 		       unsigned int flags);
 
 	int (*curve_exists) (gnutls_ecc_curve_t);	/* true/false */
+	int (*pk_exists) (gnutls_pk_algorithm_t);	/* true/false */
+	int (*sign_exists) (gnutls_sign_algorithm_t);	/* true/false */
 } gnutls_crypto_pk_st;
 
 /* priority: infinity for backend algorithms, 90 for kernel
@@ -447,5 +466,16 @@ int _gnutls_gost_key_unwrap(gnutls_gost_paramset_t gost_params,
 			    const gnutls_datum_t *enc,
 			    const gnutls_datum_t *imit,
 			    gnutls_datum_t *cek);
+
+int
+_gnutls_rsa_pkcs1_sign_pad(size_t key_bits,
+			   const gnutls_datum_t *data,
+			   unsigned char *buffer, size_t buffer_size);
+
+int
+_gnutls_rsa_pss_sign_pad(gnutls_x509_spki_st *params,
+			 size_t key_bits,
+			 const gnutls_datum_t *data,
+			 unsigned char *buffer, size_t buffer_size);
 
 #endif /* GNUTLS_LIB_CRYPTO_BACKEND_H */

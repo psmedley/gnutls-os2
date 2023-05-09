@@ -2,7 +2,7 @@
 
  Anyone is welcome to contribute to GnuTLS. You can either take up
 tasks from our [planned list](https://gitlab.com/gnutls/gnutls/milestones),
-or suprise us with enhancement we didn't plan for. In all cases be prepared
+or surprise us with enhancement we didn't plan for. In all cases be prepared
 to defend and justify your enhancements, and get through few rounds
 of changes. 
 
@@ -92,7 +92,7 @@ E.g. ```gnutls_x509_crt_get_dn```, refers to the X.509
 certificate parsing part of gnutls. Some of the used prefixes are the
 following.
  * ```gnutls_x509_crt_``` for the X.509 certificate part
- * ```gnutls_session_``` for the TLS session part (but this may be omited)
+ * ```gnutls_session_``` for the TLS session part (but this may be omitted)
  * ```gnutls_handshake_``` for the TLS handshake part
  * ```gnutls_record_``` for the TLS record protocol part
  * ```gnutls_alert_``` for the TLS alert protocol part
@@ -157,8 +157,25 @@ As such, some questions to answer before adding a new API:
    13.0 is made available? Would it harm the addition of a new protocol?
 
 
-The make rule 'abi-check' verifies that the ABI remained compatible since
-the last tagged release. It relies on the git tree and abi-compliance-checker.
+The make rule 'abi-check' verifies that the ABI remained compatible
+since the last tagged release, which is maintained in a separate
+[abi-dump](https://gitlab.com/gnutls/abi-dump) repository. This
+repository shall be updated upon each release if any changes are
+introduced in the ABI.
+
+To add new API during development cycle, follow the steps below:
+
+0. If there is no section in [lib/libgnutls.map](lib/libgnutls.map),
+   corresponding to the next release, add it, deriving from the
+   previous interface
+1. Add new symbols in that section
+2. Run `make abi-check-latest`; this will report differences as
+   errors.  Edit the last section of
+   [devel/libgnutls.abignore](devel/libgnutls.abignore) to suppress
+   them.
+
+When a new version is released and the abi-dump repository is updated,
+the section will be cleared.
 
 The above do not apply to the C++ library; this library's ABI should not
 be considered stable.
@@ -176,7 +193,7 @@ in a way that may break existing applications which use the API in a
 reasonable way. If the existing function allows flags, then a new flag
 should be introduced to enable the new behavior.
 
-When it is necessary, or desireable to enable the new features by default
+When it is necessary, or desirable to enable the new features by default
 (e.g., TLS1.3 introduction), the "next" releases should be used (and
 introduced if necessary), to allow the modification to be tested for an
 extended amount of time (see the [Release policy](RELEASES.md)).
@@ -402,6 +419,12 @@ files (.def) are auto-generated. Normally when introducing new functions,
 or adding new command line options to tools you need to run 'make
 files-update', review the output (when feasible) and commit it separately,
 e.g., with a message: "auto-generated files update".
+
+ The 'files-update' rule also regenerates the ABI dump files (.abi), used by
+the 'abi-check' rule to ensure library ABI compatibility. To make it easier
+to track actual changes to be made in those files, a git external diff
+driver is provided as `devel/git-abidiff-gnutls`. See the comment in the
+file for the instruction.
 
 
 # Guile bindings:

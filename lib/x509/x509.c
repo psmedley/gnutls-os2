@@ -360,7 +360,8 @@ static int compare_sig_algorithm(gnutls_x509_crt_t cert)
 	}
 
 	if (empty1 != empty2 ||
-	    sp1.size != sp2.size || safe_memcmp(sp1.data, sp2.data, sp1.size) != 0) {
+	    sp1.size != sp2.size ||
+	    (sp1.size > 0 && memcmp(sp1.data, sp2.data, sp1.size) != 0)) {
 		gnutls_assert();
 		ret = GNUTLS_E_CERTIFICATE_ERROR;
 		goto cleanup;
@@ -420,6 +421,138 @@ static size_t hhasher(const void *entry, size_t n)
 	return hash_pjw_bare(e, strlen(e)) % n;
 }
 
+#ifdef STRICT_X509
+
+/* Check whether certificates serial number is RFC5280 compliant */
+static bool has_valid_serial(gnutls_x509_crt_t cert)
+{
+	int err, is_zero;
+	unsigned i;
+	unsigned char serial[128];
+	size_t serial_size = sizeof(serial);
+
+	err = gnutls_x509_crt_get_serial(cert, serial, &serial_size);
+	if (err < 0) {
+		_gnutls_debug_log("error: could not read serial number\n");
+		return false;
+	}
+
+	if (serial_size > 20) {
+		_gnutls_debug_log("error: serial number value is longer than 20 octets\n");
+		return false;
+	}
+
+	if (serial[0] & 0x80) {
+		_gnutls_debug_log("error: serial number is negative\n");
+		return false;
+	}
+
+	is_zero = 1;
+	for (i = 0; i < serial_size; ++i) {
+		if (serial[i]) {
+			is_zero = 0;
+			break;
+		}
+	}
+
+	if (is_zero) {
+		_gnutls_debug_log("error: serial number is zero\n");
+		return false;
+	}
+
+	return true;
+}
+
+/* Check if extension can be successfully parsed */
+static bool is_valid_extension(const char *oid, gnutls_datum_t *der)
+{
+	int err = 0, i;
+	unsigned u;
+	size_t sz;
+	time_t t1, t2;
+	char *s1 = NULL, *s2 = NULL;
+	gnutls_datum_t datum = {NULL, 0};
+
+	if (!strcmp(oid, GNUTLS_X509EXT_OID_BASIC_CONSTRAINTS)) {
+		err = gnutls_x509_ext_import_basic_constraints(der, &u, &i);
+	} else if (!strcmp(oid, GNUTLS_X509EXT_OID_SUBJECT_KEY_ID)) {
+		err = gnutls_x509_ext_import_subject_key_id(der, &datum);
+	} else if (!strcmp(oid, GNUTLS_X509EXT_OID_CRT_POLICY)) {
+		gnutls_x509_policies_t policies;
+		if (gnutls_x509_policies_init(&policies) < 0)
+			return false;
+		err = gnutls_x509_ext_import_policies(der, policies, 0);
+		gnutls_x509_policies_deinit(policies);
+	} else if (!strcmp(oid, GNUTLS_X509_OID_POLICY_ANY)) {
+		err = gnutls_x509_ext_import_inhibit_anypolicy(der, &u);
+	} else if (!strcmp(oid, GNUTLS_X509EXT_OID_AUTHORITY_KEY_ID)) {
+		gnutls_x509_aki_t aki;
+		if (gnutls_x509_aki_init(&aki) < 0)
+			return false;
+		err = gnutls_x509_ext_import_authority_key_id(der, aki, 0);
+		gnutls_x509_aki_deinit(aki);
+	} else if (!strcmp(oid, GNUTLS_X509EXT_OID_KEY_USAGE)) {
+		err = gnutls_x509_ext_import_key_usage(der, &u);
+	} else if (!strcmp(oid, GNUTLS_X509EXT_OID_PRIVATE_KEY_USAGE_PERIOD)) {
+		err = gnutls_x509_ext_import_private_key_usage_period(der, &t1, &t2);
+	} else if (!strcmp(oid, GNUTLS_X509EXT_OID_EXTENDED_KEY_USAGE)) {
+		gnutls_x509_key_purposes_t purposes;
+		if (gnutls_x509_key_purpose_init(&purposes) < 0)
+			return false;
+		err = gnutls_x509_ext_import_key_purposes(der, purposes, 0);
+		gnutls_x509_key_purpose_deinit(purposes);
+	} else if (!strcmp(oid, GNUTLS_X509EXT_OID_SAN) ||
+		   !strcmp(oid, GNUTLS_X509EXT_OID_IAN)) {
+		gnutls_subject_alt_names_t names;
+		if (gnutls_subject_alt_names_init(&names) < 0)
+			return false;
+		err = gnutls_x509_ext_import_subject_alt_names(der, names, 0);
+		gnutls_subject_alt_names_deinit(names);
+	} else if (!strcmp(oid, GNUTLS_X509EXT_OID_CRL_DIST_POINTS)) {
+		gnutls_x509_crl_dist_points_t dp;
+		if (gnutls_x509_crl_dist_points_init(&dp) < 0)
+			return false;
+		err = gnutls_x509_ext_import_crl_dist_points(der, dp, 0);
+		gnutls_x509_crl_dist_points_deinit(dp);
+	} else if (!strcmp(oid, GNUTLS_X509EXT_OID_PROXY_CRT_INFO)) {
+		err = gnutls_x509_ext_import_proxy(der, &i, &s1, &s2, &sz);
+	} else if (!strcmp(oid, GNUTLS_X509EXT_OID_AUTHORITY_INFO_ACCESS)) {
+		gnutls_x509_aia_t aia;
+		if (gnutls_x509_aia_init(&aia) < 0)
+			return false;
+		err = gnutls_x509_ext_import_aia(der, aia, 0);
+		gnutls_x509_aia_deinit(aia);
+	} else if (!strcmp(oid, GNUTLS_X509EXT_OID_CT_SCT_V1)) {
+		gnutls_x509_ct_scts_t scts;
+		if (gnutls_x509_ext_ct_scts_init(&scts) < 0)
+			return false;
+		err = gnutls_x509_ext_ct_import_scts(der, scts, 0);
+		gnutls_x509_ext_ct_scts_deinit(scts);
+	} else if (!strcmp(oid, GNUTLS_X509EXT_OID_NAME_CONSTRAINTS)) {
+		gnutls_x509_name_constraints_t nc;
+		if (gnutls_x509_name_constraints_init(&nc) < 0)
+			return false;
+		err = gnutls_x509_ext_import_name_constraints(der, nc, 0);
+		gnutls_x509_name_constraints_deinit(nc);
+	} else if (!strcmp(oid, GNUTLS_X509EXT_OID_TLSFEATURES)) {
+		gnutls_x509_tlsfeatures_t features;
+		if (gnutls_x509_tlsfeatures_init(&features) < 0)
+			return false;
+		err = gnutls_x509_ext_import_tlsfeatures(der, features, 0);
+		gnutls_x509_tlsfeatures_deinit(features);
+	} else {
+		return true;
+	}
+
+	gnutls_free(s1);
+	gnutls_free(s2);
+	_gnutls_free_datum(&datum);
+
+	return err == 0;
+}
+
+#endif /* STRICT_X509 */
+
 int _gnutls_check_cert_sanity(gnutls_x509_crt_t cert)
 {
 	int ret = 0, version;
@@ -437,6 +570,14 @@ int _gnutls_check_cert_sanity(gnutls_x509_crt_t cert)
 
 	version = ret;
 
+#ifdef STRICT_X509
+	/* enforce upper bound on certificate version (RFC5280 compliant) */
+	if (version > 3) {
+		_gnutls_debug_log("error: invalid certificate version %d\n", version);
+		return gnutls_assert_val(GNUTLS_E_X509_CERTIFICATE_ERROR);
+	}
+#endif
+
 	if (version < 3) {
 		if (!cert->modified) {
 			ret = _gnutls_x509_get_raw_field2(cert->cert, &cert->der,
@@ -452,9 +593,8 @@ int _gnutls_check_cert_sanity(gnutls_x509_crt_t cert)
 			}
 		}
 	} else {
-		/* Version is >= 3; ensure no duplicate extensions are
-		 * present. */
-		unsigned i;
+		/* Version is 3; ensure no duplicate extensions are present. */
+		unsigned i, critical;
 		char oid[MAX_OID_SIZE];
 		size_t oid_size;
 		char *o;
@@ -465,7 +605,7 @@ int _gnutls_check_cert_sanity(gnutls_x509_crt_t cert)
 
 		for (i=0;;i++) {
 			oid_size = sizeof(oid);
-			ret = gnutls_x509_crt_get_extension_info(cert, i, oid, &oid_size, NULL);
+			ret = gnutls_x509_crt_get_extension_info(cert, i, oid, &oid_size, &critical);
 			if (ret < 0) {
 				if (ret == GNUTLS_E_REQUESTED_DATA_NOT_AVAILABLE)
 					break;
@@ -490,6 +630,19 @@ int _gnutls_check_cert_sanity(gnutls_x509_crt_t cert)
 				ret = gnutls_assert_val(GNUTLS_E_X509_DUPLICATE_EXTENSION);
 				goto cleanup;
 			}
+
+#ifdef STRICT_X509
+			gnutls_datum_t der = { NULL, 0 };
+			ret = gnutls_x509_crt_get_extension_data2(cert, i, &der);
+			if (ret < 0)
+				continue;
+			if (critical && !is_valid_extension(oid, &der)) {
+				_gnutls_free_datum(&der);
+				_gnutls_debug_log("error: could not parse extension (%s)\n");
+				return gnutls_assert_val(GNUTLS_E_X509_CERTIFICATE_ERROR);
+			}
+			_gnutls_free_datum(&der);
+#endif
 		}
 
 		hash_free(htable);
@@ -516,6 +669,13 @@ int _gnutls_check_cert_sanity(gnutls_x509_crt_t cert)
 			goto cleanup;
 		}
 	}
+
+#ifdef STRICT_X509
+	if (!has_valid_serial(cert)) {
+		ret = gnutls_assert_val(GNUTLS_E_X509_CERTIFICATE_ERROR);
+		goto cleanup;
+	}
+#endif
 
 	if (gnutls_x509_crt_get_expiration_time(cert) == -1 ||
 	    gnutls_x509_crt_get_activation_time(cert) == -1) {
@@ -703,7 +863,7 @@ gnutls_x509_crt_get_issuer_dn(gnutls_x509_crt_t cert, char *buf,
 /**
  * gnutls_x509_crt_get_issuer_dn2:
  * @cert: should contain a #gnutls_x509_crt_t type
- * @dn: a pointer to a structure to hold the name
+ * @dn: a pointer to a structure to hold the name; must be freed using gnutls_free()
  *
  * This function will allocate buffer and copy the name of issuer of the Certificate.
  * The name will be in the form "C=xxxx,O=yyyy,CN=zzzz" as
@@ -734,7 +894,7 @@ gnutls_x509_crt_get_issuer_dn2(gnutls_x509_crt_t cert, gnutls_datum_t * dn)
 /**
  * gnutls_x509_crt_get_issuer_dn3:
  * @cert: should contain a #gnutls_x509_crt_t type
- * @dn: a pointer to a structure to hold the name
+ * @dn: a pointer to a structure to hold the name; must be freed using gnutls_free()
  * @flags: zero or %GNUTLS_X509_DN_FLAG_COMPAT
  *
  * This function will allocate buffer and copy the name of issuer of the Certificate.
@@ -860,7 +1020,8 @@ gnutls_x509_crt_get_issuer_dn_oid(gnutls_x509_crt_t cert,
  * described in RFC4514. The output string will be ASCII or UTF-8
  * encoded, depending on the certificate data.
  *
- * If @buf is null then only the size will be filled.
+ * The @buf returned will be null terminated and the @buf_size will account
+ * for the trailing null. If @buf is null then only the size will be filled.
  *
  * This function does not output a fully RFC4514 compliant string, if
  * that is required see gnutls_x509_crt_get_dn3().
@@ -887,7 +1048,7 @@ gnutls_x509_crt_get_dn(gnutls_x509_crt_t cert, char *buf,
 /**
  * gnutls_x509_crt_get_dn2:
  * @cert: should contain a #gnutls_x509_crt_t type
- * @dn: a pointer to a structure to hold the name
+ * @dn: a pointer to a structure to hold the name; must be freed using gnutls_free()
  *
  * This function will allocate buffer and copy the name of the Certificate.
  * The name will be in the form "C=xxxx,O=yyyy,CN=zzzz" as
@@ -917,7 +1078,7 @@ int gnutls_x509_crt_get_dn2(gnutls_x509_crt_t cert, gnutls_datum_t * dn)
 /**
  * gnutls_x509_crt_get_dn3:
  * @cert: should contain a #gnutls_x509_crt_t type
- * @dn: a pointer to a structure to hold the name
+ * @dn: a pointer to a structure to hold the name; must be freed using gnutls_free()
  * @flags: zero or %GNUTLS_X509_DN_FLAG_COMPAT
  *
  * This function will allocate buffer and copy the name of the Certificate.
@@ -1177,29 +1338,12 @@ gnutls_x509_crt_get_signature(gnutls_x509_crt_t cert,
  **/
 int gnutls_x509_crt_get_version(gnutls_x509_crt_t cert)
 {
-	uint8_t version[8];
-	int len, result;
-
 	if (cert == NULL) {
 		gnutls_assert();
 		return GNUTLS_E_INVALID_REQUEST;
 	}
 
-	len = sizeof(version);
-	if ((result =
-	     asn1_read_value(cert->cert, "tbsCertificate.version", version,
-			     &len)) != ASN1_SUCCESS) {
-
-		if (result == ASN1_ELEMENT_NOT_FOUND)
-			return 1;	/* the DEFAULT version */
-		gnutls_assert();
-		return _gnutls_asn2err(result);
-	}
-
-	if (len != 1 || version[0] >= 0x80)
-		return gnutls_assert_val(GNUTLS_E_CERTIFICATE_ERROR);
-
-	return (int) version[0] + 1;
+	return _gnutls_x509_get_version(cert->cert, "tbsCertificate.version");
 }
 
 /**
@@ -1687,7 +1831,7 @@ gnutls_x509_crt_get_spki(gnutls_x509_crt_t cert, gnutls_x509_spki_t spki, unsign
  *
  */
 int
-_gnutls_parse_general_name2(ASN1_TYPE src, const char *src_name,
+_gnutls_parse_general_name2(asn1_node src, const char *src_name,
 			   int seq, gnutls_datum_t *dname,
 			   unsigned int *ret_type, int othername_oid)
 {
@@ -1702,9 +1846,9 @@ _gnutls_parse_general_name2(ASN1_TYPE src, const char *src_name,
 		seq++;	/* 0->1, 1->2 etc */
 
 		if (src_name[0] != 0)
-			snprintf(nptr, sizeof(nptr), "%s.?%u", src_name, seq);
+			snprintf(nptr, sizeof(nptr), "%s.?%d", src_name, seq);
 		else
-			snprintf(nptr, sizeof(nptr), "?%u", seq);
+			snprintf(nptr, sizeof(nptr), "?%d", seq);
 	} else {
 		snprintf(nptr, sizeof(nptr), "%s", src_name);
 	}
@@ -1750,13 +1894,17 @@ _gnutls_parse_general_name2(ASN1_TYPE src, const char *src_name,
 		} else {
 			char oid[MAX_OID_SIZE];
 
-			if (src_name[0] != 0)
+			if (src_name[0] != 0 && seq != -1)
 				snprintf(nptr, sizeof(nptr),
-					 "%s.?%u.otherName.type-id",
+					 "%s.?%d.otherName.type-id",
 					 src_name, seq);
+			else if (src_name[0] != 0)
+				snprintf(nptr, sizeof(nptr),
+					 "%s.otherName.type-id",
+					 src_name);
 			else
 				snprintf(nptr, sizeof(nptr),
-					 "?%u.otherName.type-id", seq);
+					 "?%d.otherName.type-id", seq);
 
 			len = sizeof(oid);
 
@@ -1792,12 +1940,6 @@ _gnutls_parse_general_name2(ASN1_TYPE src, const char *src_name,
 			return ret;
 		}
 
-		if (type == GNUTLS_SAN_REGISTERED_ID && tmp.size > 0) {
-			/* see #805; OIDs contain the null termination byte */
-			assert(tmp.data[tmp.size-1] == 0);
-			tmp.size--;
-		}
-
 		/* _gnutls_x509_read_value() null terminates */
 		dname->size = tmp.size;
 		dname->data = tmp.data;
@@ -1814,7 +1956,7 @@ _gnutls_parse_general_name2(ASN1_TYPE src, const char *src_name,
  * Type is also returned as a parameter in case of an error.
  */
 int
-_gnutls_parse_general_name(ASN1_TYPE src, const char *src_name,
+_gnutls_parse_general_name(asn1_node src, const char *src_name,
 			   int seq, void *name, size_t * name_size,
 			   unsigned int *ret_type, int othername_oid)
 {
@@ -1871,7 +2013,7 @@ get_alt_name(gnutls_subject_alt_names_t san,
 		goto cleanup;
 	}
 
-	if (othername_oid && type == GNUTLS_SAN_OTHERNAME && ooid.data) {
+	if (type == GNUTLS_SAN_OTHERNAME && ooid.data) {
 		unsigned vtype;
 		ret = gnutls_x509_othername_to_virtual((char*)ooid.data, &oname, &vtype, &virt);
 		if (ret >= 0) {
@@ -3013,10 +3155,15 @@ gnutls_x509_crt_export2(gnutls_x509_crt_t cert,
 	if (!cert->modified && cert->der.size) {
 		if (format == GNUTLS_X509_FMT_DER)
 			return _gnutls_set_datum(out, cert->der.data, cert->der.size);
-		else
-			return _gnutls_fbase64_encode(PEM_X509_CERT2, cert->der.data,
-						      cert->der.size, out);
-
+		else {
+			int ret = _gnutls_fbase64_encode(PEM_X509_CERT2,
+							 cert->der.data,
+							 cert->der.size,
+							 out);
+			if (ret < 0)
+				return ret;
+			return 0;
+		}
 	}
 
 	return _gnutls_x509_export_int2(cert->cert, format, PEM_X509_CERT2,
@@ -3717,7 +3864,7 @@ gnutls_x509_crt_list_import2(gnutls_x509_crt_t ** certs,
 	unsigned int init = 1024;
 	int ret;
 
-	*certs = gnutls_malloc(sizeof(gnutls_x509_crt_t) * init);
+	*certs = _gnutls_reallocarray(NULL, init, sizeof(gnutls_x509_crt_t));
 	if (*certs == NULL) {
 		gnutls_assert();
 		return GNUTLS_E_MEMORY_ERROR;
@@ -3727,9 +3874,8 @@ gnutls_x509_crt_list_import2(gnutls_x509_crt_t ** certs,
 	    gnutls_x509_crt_list_import(*certs, &init, data, format,
 					flags | GNUTLS_X509_CRT_LIST_IMPORT_FAIL_IF_EXCEED);
 	if (ret == GNUTLS_E_SHORT_MEMORY_BUFFER) {
-		*certs =
-		    gnutls_realloc_fast(*certs,
-					sizeof(gnutls_x509_crt_t) * init);
+		*certs = _gnutls_reallocarray_fast(*certs, init,
+						   sizeof(gnutls_x509_crt_t));
 		if (*certs == NULL) {
 			gnutls_assert();
 			return GNUTLS_E_MEMORY_ERROR;
@@ -3884,20 +4030,17 @@ gnutls_x509_crt_list_import(gnutls_x509_crt_t * certs,
 
 	if (nocopy == 0) {
 		if (flags & GNUTLS_X509_CRT_LIST_SORT && *cert_max > 1) {
-			gnutls_x509_crt_t sorted[DEFAULT_MAX_VERIFY_DEPTH];
-			gnutls_x509_crt_t *s;
-
-			s = _gnutls_sort_clist(sorted, certs, cert_max, gnutls_x509_crt_deinit);
-			if (s == certs) {
-				gnutls_assert();
+			if (*cert_max > DEFAULT_MAX_VERIFY_DEPTH) {
 				ret = GNUTLS_E_UNIMPLEMENTED_FEATURE;
 				goto error;
 			}
-
-			count = *cert_max;
-			if (s == sorted) {
-				memcpy(certs, s, (*cert_max)*sizeof(gnutls_x509_crt_t));
+			count = _gnutls_sort_clist(certs, *cert_max);
+			if (count < *cert_max) {
+				for (j = count; j < *cert_max; j++) {
+					gnutls_x509_crt_deinit(certs[j]);
+				}
 			}
+			*cert_max = count;
 		}
 
 		if (flags & GNUTLS_X509_CRT_LIST_FAIL_IF_UNSORTED) {
@@ -4019,7 +4162,7 @@ gnutls_x509_crt_get_issuer_unique_id(gnutls_x509_crt_t crt, char *buf,
 }
 
 static int
-legacy_parse_aia(ASN1_TYPE src,
+legacy_parse_aia(asn1_node src,
 		  unsigned int seq, int what, gnutls_datum_t * data)
 {
 	int len;
@@ -4190,7 +4333,7 @@ gnutls_x509_crt_get_authority_info_access(gnutls_x509_crt_t crt,
 {
 	int ret;
 	gnutls_datum_t aia;
-	ASN1_TYPE c2 = ASN1_TYPE_EMPTY;
+	asn1_node c2 = NULL;
 
 	if (crt == NULL) {
 		gnutls_assert();
@@ -4395,7 +4538,7 @@ gnutls_x509_crt_list_import_url(gnutls_x509_crt_t **certs,
 		gnutls_free(issuer.data);
 	}
 
-	*certs = gnutls_malloc(total*sizeof(gnutls_x509_crt_t));
+	*certs = _gnutls_reallocarray(NULL, total, sizeof(gnutls_x509_crt_t));
 	if (*certs == NULL) {
 		ret = GNUTLS_E_MEMORY_ERROR;
 		goto cleanup;

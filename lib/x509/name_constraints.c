@@ -96,7 +96,8 @@ static int validate_name_constraints_node(gnutls_x509_subject_alt_name_t type,
 {
 	if (type != GNUTLS_SAN_DNSNAME && type != GNUTLS_SAN_RFC822NAME &&
 		type != GNUTLS_SAN_DN && type != GNUTLS_SAN_URI &&
-		type != GNUTLS_SAN_IPADDRESS) {
+		type != GNUTLS_SAN_IPADDRESS && 
+		type != GNUTLS_SAN_OTHERNAME_MSUSERPRINCIPAL) {
 		return gnutls_assert_val(GNUTLS_E_X509_UNKNOWN_SAN);
 	}
 
@@ -111,7 +112,7 @@ static int validate_name_constraints_node(gnutls_x509_subject_alt_name_t type,
 	return GNUTLS_E_SUCCESS;
 }
 
-int _gnutls_extract_name_constraints(ASN1_TYPE c2, const char *vstr,
+int _gnutls_extract_name_constraints(asn1_node c2, const char *vstr,
 									 name_constraints_node_st ** _nc)
 {
 	int ret;
@@ -136,6 +137,28 @@ int _gnutls_extract_name_constraints(ASN1_TYPE c2, const char *vstr,
 		if (ret < 0) {
 			gnutls_assert();
 			break;
+		}
+
+		if (type == GNUTLS_SAN_OTHERNAME) {
+			gnutls_datum_t oid = { NULL, 0 };
+                        gnutls_datum_t parsed_othername = { NULL, 0 };
+                        ret = _gnutls_parse_general_name2(c2, tmpstr, -1, &oid, &type, 1);
+                        if(ret < 0) {
+                                gnutls_assert();
+                                goto cleanup;
+                        }
+
+                        ret = gnutls_x509_othername_to_virtual((char*)oid.data, &tmp, &type,
+                                &parsed_othername);
+                        if(ret < 0) {
+                                gnutls_assert();
+                                goto cleanup;
+                        }
+
+			gnutls_free(oid.data);
+			gnutls_free(tmp.data);
+
+                        memcpy(&tmp, &parsed_othername, sizeof(gnutls_datum_t));
 		}
 
 		ret = validate_name_constraints_node(type, &tmp);
@@ -165,7 +188,8 @@ int _gnutls_extract_name_constraints(ASN1_TYPE c2, const char *vstr,
 		tmp.data = NULL;
 	}
 
-	if (ret < 0 && ret != GNUTLS_E_REQUESTED_DATA_NOT_AVAILABLE) {
+	assert(ret < 0);
+	if (ret != GNUTLS_E_REQUESTED_DATA_NOT_AVAILABLE) {
 		gnutls_assert();
 		goto cleanup;
 	}
@@ -178,7 +202,7 @@ int _gnutls_extract_name_constraints(ASN1_TYPE c2, const char *vstr,
 
 /*-
  * _gnutls_name_constraints_node_free:
- * @node: name constriants node
+ * @node: name constraints node
  *
  * Deallocate a list of name constraints nodes starting at the given node.
  -*/

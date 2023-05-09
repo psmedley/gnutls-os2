@@ -39,19 +39,9 @@ static int
 data2hex(const void *data, size_t data_size,
 	 gnutls_datum_t *out);
 
-struct oid_to_string {
-	const char *oid;
-	unsigned oid_size;
-	const char *ldap_desc;
-	unsigned ldap_desc_size;
-	const char *asn_desc;	/* description in the pkix file if complex type */
-	unsigned int etype;	/* the libtasn1 ASN1_ETYPE or INVALID
-				 * if cannot be simply parsed */
-};
-
 #define ENTRY(oid, ldap, asn, etype) {oid, sizeof(oid)-1, ldap, sizeof(ldap)-1, asn, etype}
 
-/* when there is no ldap description */
+/* when there is no name description */
 #define ENTRY_ND(oid, asn, etype) {oid, sizeof(oid)-1, NULL, 0, asn, etype}
 
 /* This list contains all the OIDs that may be
@@ -144,20 +134,26 @@ static const struct oid_to_string _oid2str[] = {
 	{NULL, 0, NULL, 0, NULL, 0}
 };
 
-static const struct oid_to_string *get_oid_entry(const char *oid)
+const struct oid_to_string *_gnutls_oid_get_entry(const struct oid_to_string *ots, const char *oid)
 {
 	unsigned int i = 0;
 	unsigned len = strlen(oid);
 
 	do {
-		if (len == _oid2str[i].oid_size &&
-			strcmp(_oid2str[i].oid, oid) == 0)
-			return &_oid2str[i];
+		if (len == ots[i].oid_size &&
+			strcmp(ots[i].oid, oid) == 0)
+			return &ots[i];
 		i++;
 	}
-	while (_oid2str[i].oid != NULL);
+	while (ots[i].oid != NULL);
 
 	return NULL;
+}
+
+const char *_gnutls_oid_get_asn_desc(const char *oid)
+{
+	const struct oid_to_string *entry = _gnutls_oid_get_entry(_oid2str, oid);
+	return entry ? entry->asn_desc : NULL;
 }
 
 const char *_gnutls_ldap_string_to_oid(const char *str, unsigned str_len)
@@ -165,9 +161,9 @@ const char *_gnutls_ldap_string_to_oid(const char *str, unsigned str_len)
 	unsigned int i = 0;
 
 	do {
-		if ((_oid2str[i].ldap_desc != NULL) &&
-		    (str_len == _oid2str[i].ldap_desc_size) &&
-		    (c_strncasecmp(_oid2str[i].ldap_desc, str, str_len) ==
+		if ((_oid2str[i].name_desc != NULL) &&
+		    (str_len == _oid2str[i].name_desc_size) &&
+		    (c_strncasecmp(_oid2str[i].name_desc, str, str_len) ==
 		     0))
 			return _oid2str[i].oid;
 		i++;
@@ -242,18 +238,7 @@ static int str_escape(const gnutls_datum_t * str, gnutls_datum_t * escaped)
  **/
 int gnutls_x509_dn_oid_known(const char *oid)
 {
-	unsigned int i = 0;
-	unsigned len = strlen(oid);
-
-	do {
-		if (len == _oid2str[i].oid_size &&
-			strcmp(_oid2str[i].oid, oid) == 0)
-			return 1;
-		i++;
-	}
-	while (_oid2str[i].oid != NULL);
-
-	return 0;
+	return _gnutls_oid_get_entry(_oid2str, oid) != NULL;
 }
 
 /**
@@ -272,17 +257,10 @@ int gnutls_x509_dn_oid_known(const char *oid)
  **/
 const char *gnutls_x509_dn_oid_name(const char *oid, unsigned int flags)
 {
-	unsigned int i = 0;
-	unsigned len = strlen(oid);
+	const struct oid_to_string *entry =_gnutls_oid_get_entry(_oid2str, oid);
 
-	do {
-		if ((_oid2str[i].oid_size == len) &&
-			strcmp(_oid2str[i].oid, oid) == 0 && _oid2str[i].ldap_desc != NULL)
-			return _oid2str[i].ldap_desc;
-		i++;
-	}
-	while (_oid2str[i].oid != NULL);
-
+	if (entry && entry->name_desc)
+		return entry->name_desc;
 	if (flags & GNUTLS_X509_DN_OID_RETURN_OID)
 		return oid;
 	else
@@ -350,7 +328,7 @@ decode_complex_string(const struct oid_to_string *oentry, void *value,
 {
 	char str[MAX_STRING_LEN], tmpname[128];
 	int len = -1, result;
-	ASN1_TYPE tmpasn = ASN1_TYPE_EMPTY;
+	asn1_node tmpasn = NULL;
 	char asn1_err[ASN1_MAX_ERROR_DESCRIPTION_SIZE] = "";
 	unsigned int etype;
 	gnutls_datum_t td = {NULL, 0};
@@ -450,7 +428,7 @@ _gnutls_x509_dn_to_string(const char *oid, void *value,
 		return GNUTLS_E_INVALID_REQUEST;
 	}
 
-	oentry = get_oid_entry(oid);
+	oentry = _gnutls_oid_get_entry(_oid2str, oid);
 	if (oentry == NULL) {	/* unknown OID -> hex */
  unknown_oid:
 		ret = data2hex(value, value_size, str);
@@ -549,7 +527,7 @@ gnutls_x509_subject_alt_name_t _gnutls_x509_san_find_type(char *str_type)
  * to PEM or DER raw data.
  */
 int
-_gnutls_x509_export_int_named(ASN1_TYPE asn1_data, const char *name,
+_gnutls_x509_export_int_named(asn1_node asn1_data, const char *name,
 			      gnutls_x509_crt_fmt_t format,
 			      const char *pem_header,
 			      unsigned char *output_data,
@@ -577,7 +555,9 @@ _gnutls_x509_export_int_named(ASN1_TYPE asn1_data, const char *name,
 
 	*output_data_size = (size_t) out.size;
 	if (output_data) {
-		memcpy(output_data, out.data, (size_t) out.size);
+		if (out.size > 0) {
+			memcpy(output_data, out.data, (size_t) out.size);
+		}
 		if (format == GNUTLS_X509_FMT_PEM)
 			output_data[out.size] = 0;
 	}
@@ -594,7 +574,7 @@ _gnutls_x509_export_int_named(ASN1_TYPE asn1_data, const char *name,
  * to PEM or DER raw data.
  */
 int
-_gnutls_x509_export_int_named2(ASN1_TYPE asn1_data, const char *name,
+_gnutls_x509_export_int_named2(asn1_node asn1_data, const char *name,
 			       gnutls_x509_crt_fmt_t format,
 			       const char *pem_header,
 			       gnutls_datum_t * out)
@@ -658,7 +638,8 @@ _gnutls_x509_decode_string(unsigned int etype,
 	if (td.data == NULL)
 		return gnutls_assert_val(GNUTLS_E_MEMORY_ERROR);
 
-	memcpy(td.data, str, str_size);
+        if (str_size > 0)
+                memcpy(td.data, str, str_size);
 	td.data[str_size] = 0;
 
 	if (allow_ber)
@@ -697,7 +678,7 @@ _gnutls_x509_decode_string(unsigned int etype,
  * the required data size (and places a null byte).
  */
 static int
-x509_read_value(ASN1_TYPE c, const char *root,
+x509_read_value(asn1_node c, const char *root,
 		gnutls_datum_t * ret, unsigned allow_null)
 {
 	int len = 0, result;
@@ -720,7 +701,7 @@ x509_read_value(ASN1_TYPE c, const char *root,
 	}
 
 	if (etype == ASN1_ETYPE_BIT_STRING) {
-		len = (len + 7)/8;
+		len = (len + 7) / 8;
 	}
 
 	tmp = gnutls_malloc((size_t) len + 1);
@@ -738,10 +719,21 @@ x509_read_value(ASN1_TYPE c, const char *root,
 			goto cleanup;
 		}
 
-		if (etype == ASN1_ETYPE_BIT_STRING) {
-			ret->size = (len+7) / 8;
-		} else {
+		switch (etype) {
+		case ASN1_ETYPE_BIT_STRING:
+			ret->size = (len + 7) / 8;
+			break;
+		case ASN1_ETYPE_OBJECT_ID:
+			if (len > 0) {
+				ret->size = len - 1;
+			} else {
+				result = gnutls_assert_val(GNUTLS_E_ASN1_DER_ERROR);
+				goto cleanup;
+			}
+			break;
+		default:
 			ret->size = (unsigned) len;
+			break;
 		}
 	} else {
 		ret->size = 0;
@@ -758,14 +750,14 @@ x509_read_value(ASN1_TYPE c, const char *root,
 }
 
 int
-_gnutls_x509_read_value(ASN1_TYPE c, const char *root,
+_gnutls_x509_read_value(asn1_node c, const char *root,
 			gnutls_datum_t * ret)
 {
 	return x509_read_value(c, root, ret, 0);
 }
 
 int
-_gnutls_x509_read_null_value(ASN1_TYPE c, const char *root,
+_gnutls_x509_read_null_value(asn1_node c, const char *root,
 			gnutls_datum_t * ret)
 {
 	return x509_read_value(c, root, ret, 1);
@@ -778,7 +770,7 @@ _gnutls_x509_read_null_value(ASN1_TYPE c, const char *root,
  * at the end of a readable string value (which is not accounted into size)
  */
 int
-_gnutls_x509_read_string(ASN1_TYPE c, const char *root,
+_gnutls_x509_read_string(asn1_node c, const char *root,
 			 gnutls_datum_t * ret, unsigned int etype, unsigned int allow_ber)
 {
 	int len = 0, result;
@@ -863,18 +855,18 @@ int _gnutls_x509_encode_string(unsigned int etype,
 	return 0;
 }
 
-/* DER Encodes the src ASN1_TYPE and stores it to
+/* DER Encodes the src asn1_node and stores it to
  * the given datum. If str is non zero then the data are encoded as
  * an OCTET STRING.
  */
 int
-_gnutls_x509_der_encode(ASN1_TYPE src, const char *src_name,
+_gnutls_x509_der_encode(asn1_node src, const char *src_name,
 			gnutls_datum_t * res, int str)
 {
 	int size, result;
 	int asize;
 	uint8_t *data = NULL;
-	ASN1_TYPE c2 = ASN1_TYPE_EMPTY;
+	asn1_node c2 = NULL;
 
 	size = 0;
 	result = asn1_der_coding(src, src_name, NULL, &size, NULL);
@@ -943,14 +935,14 @@ _gnutls_x509_der_encode(ASN1_TYPE src, const char *src_name,
 
 }
 
-/* DER Encodes the src ASN1_TYPE and stores it to
+/* DER Encodes the src asn1_node and stores it to
  * dest in dest_name. Useful to encode something and store it
  * as OCTET. If str is non null then the data are encoded as
  * an OCTET STRING.
  */
 int
-_gnutls_x509_der_encode_and_copy(ASN1_TYPE src, const char *src_name,
-				 ASN1_TYPE dest, const char *dest_name,
+_gnutls_x509_der_encode_and_copy(asn1_node src, const char *src_name,
+				 asn1_node dest, const char *dest_name,
 				 int str)
 {
 	int result;
@@ -979,10 +971,10 @@ _gnutls_x509_der_encode_and_copy(ASN1_TYPE src, const char *src_name,
 	return 0;
 }
 
-/* Writes the value of the datum in the given ASN1_TYPE.
+/* Writes the value of the datum in the given asn1_node.
  */
 int
-_gnutls_x509_write_value(ASN1_TYPE c, const char *root,
+_gnutls_x509_write_value(asn1_node c, const char *root,
 			 const gnutls_datum_t * data)
 {
 	int ret;
@@ -998,10 +990,10 @@ _gnutls_x509_write_value(ASN1_TYPE c, const char *root,
 	return 0;
 }
 
-/* Writes the value of the datum in the given ASN1_TYPE as a string.
+/* Writes the value of the datum in the given asn1_node as a string.
  */
 int
-_gnutls_x509_write_string(ASN1_TYPE c, const char *root,
+_gnutls_x509_write_string(asn1_node c, const char *root,
 			  const gnutls_datum_t * data, unsigned int etype)
 {
 	int ret;
@@ -1048,7 +1040,7 @@ _asnstr_append_name(char *name, size_t name_size, const char *part1,
  *
  */
 int
-_gnutls_x509_encode_and_copy_PKI_params(ASN1_TYPE dst,
+_gnutls_x509_encode_and_copy_PKI_params(asn1_node dst,
 					const char *dst_name,
 					const gnutls_pk_params_st * params)
 {
@@ -1121,7 +1113,7 @@ _gnutls_x509_encode_PKI_params(gnutls_datum_t * der,
 			       const gnutls_pk_params_st * params)
 {
 	int ret;
-	ASN1_TYPE tmp;
+	asn1_node tmp;
 
 	ret = asn1_create_element(_gnutls_get_pkix(),
 				  "PKIX1.Certificate", &tmp);
@@ -1154,7 +1146,7 @@ _gnutls_x509_encode_PKI_params(gnutls_datum_t * der,
  * ASN.1 structure. src_name should be something like "tbsCertificate.subjectPublicKeyInfo".
  */
 int
-_gnutls_x509_get_pk_algorithm(ASN1_TYPE src, const char *src_name,
+_gnutls_x509_get_pk_algorithm(asn1_node src, const char *src_name,
 			      gnutls_ecc_curve_t *curve,
 			      unsigned int *bits)
 {
@@ -1212,7 +1204,7 @@ _gnutls_x509_get_pk_algorithm(ASN1_TYPE src, const char *src_name,
  * returns them into signed_data.
  */
 int
-_gnutls_x509_get_signed_data(ASN1_TYPE src,  const gnutls_datum_t *der,
+_gnutls_x509_get_signed_data(asn1_node src,  const gnutls_datum_t *der,
 			     const char *src_name,
 			     gnutls_datum_t * signed_data)
 {
@@ -1249,7 +1241,7 @@ _gnutls_x509_get_signed_data(ASN1_TYPE src,  const gnutls_datum_t *der,
 
 /*-
  * gnutls_x509_get_signature_algorithm:
- * @src: should contain an ASN1_TYPE structure
+ * @src: should contain an asn1_node structure
  * @src_name: the description of the signature field
  *
  * This function will return a value of the #gnutls_sign_algorithm_t
@@ -1260,7 +1252,7 @@ _gnutls_x509_get_signed_data(ASN1_TYPE src,  const gnutls_datum_t *der,
  *   error.
  -*/
 int
-_gnutls_x509_get_signature_algorithm(ASN1_TYPE src, const char *src_name)
+_gnutls_x509_get_signature_algorithm(asn1_node src, const char *src_name)
 {
 	int result;
 	char name[128];
@@ -1319,7 +1311,7 @@ _gnutls_x509_get_signature_algorithm(ASN1_TYPE src, const char *src_name)
  * returns them into signed_data.
  */
 int
-_gnutls_x509_get_signature(ASN1_TYPE src, const char *src_name,
+_gnutls_x509_get_signature(asn1_node src, const char *src_name,
 			   gnutls_datum_t * signature)
 {
 	int result, len;
@@ -1388,12 +1380,12 @@ static int is_printable(char p)
 	return 0;
 }
 
-static int write_complex_string(ASN1_TYPE asn_struct, const char *where,
+static int write_complex_string(asn1_node asn_struct, const char *where,
 				const struct oid_to_string *oentry,
 				const uint8_t * data, size_t data_size)
 {
 	char tmp[128];
-	ASN1_TYPE c2;
+	asn1_node c2;
 	int result;
 	const char *string_type;
 	unsigned int i;
@@ -1459,7 +1451,7 @@ static int write_complex_string(ASN1_TYPE asn_struct, const char *where,
  */
 int
 _gnutls_x509_encode_and_write_attribute(const char *given_oid,
-					ASN1_TYPE asn1_struct,
+					asn1_node asn1_struct,
 					const char *where,
 					const void *_data,
 					int data_size, int multi)
@@ -1469,7 +1461,7 @@ _gnutls_x509_encode_and_write_attribute(const char *given_oid,
 	int result;
 	const struct oid_to_string *oentry;
 
-	oentry = get_oid_entry(given_oid);
+	oentry = _gnutls_oid_get_entry(_oid2str, given_oid);
 	if (oentry == NULL) {
 		gnutls_assert();
 		_gnutls_debug_log("Cannot find OID: %s\n", given_oid);
@@ -1564,7 +1556,7 @@ int _gnutls_strdatum_to_buf(gnutls_datum_t * d, void *buf,
 }
 
 int
-_gnutls_x509_get_raw_field2(ASN1_TYPE c2, const gnutls_datum_t * raw,
+_gnutls_x509_get_raw_field2(asn1_node c2, const gnutls_datum_t * raw,
 			 const char *whom, gnutls_datum_t * dn)
 {
 	int result, len1;
@@ -1718,38 +1710,52 @@ _gnutls_check_valid_key_id(const gnutls_datum_t *key_id,
 	return result;
 }
 
-/* Takes a certificate list and orders it with subject, issuer order.
+/* Sort a certificate list in place with subject, issuer order. @clist_size must
+ * be equal to or less than %DEFAULT_MAX_VERIFY_DEPTH.
  *
- * *clist_size contains the size of the ordered list (which is always less or
- * equal to the original).
- * @func: the function to call to elements outside the sort.
+ * Returns the index in clist where the initial contiguous segment ends. If the
+ * chain contains multiple segments separated by gaps (e.g., missing issuers),
+ * the caller shall call this function multiple times.
  *
- * This function is intentionally kept simple to be easily verified
- * so that it can be used with untrusted chains. The introduction
- * of the func parameter added significant complexity in that aspect.
- * If more demanding use-cases need to be handled, consider splitting
- * that function.
+ * For example, suppose we want the following certificate chain as a result of
+ * sorting:
  *
- * Returns the sorted list which may be the original clist.
+ *   A -> (B) -> C -> D -> E -> (F) -> G -> H -> I
  *
+ * from the input [A, C, E, D, G, I, H] (B and F are missing).
+ *
+ * On the first call of this function:
+ *
+ *   _gnutls_sort_clist(clist, clist_size)
+ *
+ * it returns 1, meaning that the first segment only contains A.  The content of
+ * @clist will remain the same [A, C, E, D, G, I, H].
+ *
+ * Then the caller will call this function again, starting from the second
+ * element:
+ *
+ *   _gnutls_sort_clist(&clist[1], clist_size - 1)
+ *
+ * This time it returns 3, meaning that the first segment contains [C, D, E].
+ * The content of @clist will be [A, C, D, E, G, I, H].
+ *
+ * Finally, after calling the function on the remaining elements:
+ *
+ *   _gnutls_sort_clist(&clist[1 + 3], clist_size - (1 + 3))
+ *
+ * It will return 3, meaning that the first segment contains [G, H, I].  At this
+ * point, sorting of @clist is complete.
  */
-gnutls_x509_crt_t *_gnutls_sort_clist(gnutls_x509_crt_t
-				     sorted[DEFAULT_MAX_VERIFY_DEPTH],
-				     gnutls_x509_crt_t *clist,
-				     unsigned int *clist_size,
-				     gnutls_cert_vfunc func)
+unsigned int _gnutls_sort_clist(gnutls_x509_crt_t *clist,
+				unsigned int clist_size)
 {
 	int prev;
-	unsigned int j, i;
+	unsigned int i, j, k;
 	int issuer[DEFAULT_MAX_VERIFY_DEPTH];	/* contain the index of the issuers */
 	bool insorted[DEFAULT_MAX_VERIFY_DEPTH]; /* non zero if clist[i] used in sorted list */
-	unsigned orig_size = *clist_size;
+	gnutls_x509_crt_t sorted[DEFAULT_MAX_VERIFY_DEPTH];
 
-	/* Do not bother sorting if too many certificates are given.
-	 * Prevent any DoS attacks.
-	 */
-	if (*clist_size > DEFAULT_MAX_VERIFY_DEPTH)
-		return clist;
+	assert(clist_size <= DEFAULT_MAX_VERIFY_DEPTH);
 
 	for (i = 0; i < DEFAULT_MAX_VERIFY_DEPTH; i++) {
 		issuer[i] = -1;
@@ -1760,78 +1766,72 @@ gnutls_x509_crt_t *_gnutls_sort_clist(gnutls_x509_crt_t
 	 * in issuer array. O(n^2) so consider that before
 	 * increasing DEFAULT_MAX_VERIFY_DEPTH.
 	 */
-	for (i = 0; i < *clist_size; i++) {
-		for (j = 1; j < *clist_size; j++) {
+	for (i = 0; i < clist_size; i++) {
+		/* Self-signed certificate found in the chain; skip it
+		 * as it should only appear in the trusted set.
+		 */
+		if (gnutls_x509_crt_check_issuer(clist[i], clist[i])) {
+			_gnutls_cert_log("self-signed cert found", clist[i]);
+			continue;
+		}
+
+		for (j = 1; j < clist_size; j++) {
 			if (i == j)
 				continue;
 
-			if (gnutls_x509_crt_check_issuer(clist[i],
-							 clist[j]) != 0) {
+			if (gnutls_x509_crt_check_issuer(clist[i], clist[j])) {
 				issuer[i] = j;
 				break;
 			}
 		}
 	}
 
-	/* the first element is always included */
 	sorted[0] = clist[0];
 	insorted[0] = 1;
 
-	if (issuer[0] == -1) {
-		*clist_size = 1;
-		goto exit;
-	}
-
 	prev = 0;
-	for (i = 1; i < *clist_size; i++) {
+	for (i = 1; i < clist_size; i++) {
 		prev = issuer[prev];
 		if (prev < 0) {	/* no issuer */
-			*clist_size = i;
 			break;
 		}
+
 		sorted[i] = clist[prev];
 		insorted[prev] = 1;
 	}
 
- exit:
-	if (func) {
-		/* call func() on all the elements that were
-		 * not used in the sorted list */
-		for (i = 1; i < orig_size; i++) {
-			if (insorted[i] == 0) {
-				func(clist[i]);
-			}
+	/* append the remaining certs */
+	for (j = 1, k = i; j < clist_size; j++) {
+		if (!insorted[j]) {
+			sorted[k++] = clist[j];
 		}
 	}
 
-	return sorted;
+	/* write out the sorted list */
+	assert(k == clist_size);
+	for (j = 0; j < clist_size; j++) {
+		clist[j] = sorted[j];
+	}
+
+	return i;
 }
 
 int _gnutls_check_if_sorted(gnutls_x509_crt_t * crt, int nr)
 {
-	void *prev_dn = NULL;
-	void *dn;
-	size_t prev_dn_size = 0, dn_size;
 	int i, ret;
 
 	/* check if the X.509 list is ordered */
 	if (nr > 1) {
 		for (i = 0; i < nr; i++) {
 			if (i > 0) {
-				dn = crt[i]->raw_dn.data;
-				dn_size = crt[i]->raw_dn.size;
-
-				if (dn_size != prev_dn_size
-				    || memcmp(dn, prev_dn, dn_size) != 0) {
+				if (!_gnutls_x509_compare_raw_dn(&crt[i]->raw_dn,
+				                                 &crt[i-1]->raw_issuer_dn)) {
 					ret =
 					    gnutls_assert_val
 					    (GNUTLS_E_CERTIFICATE_LIST_UNSORTED);
 					goto cleanup;
 				}
 			}
-
-			prev_dn = crt[i]->raw_issuer_dn.data;
-			prev_dn_size = crt[i]->raw_issuer_dn.size;
 		}
 	}
 	ret = 0;
@@ -1925,4 +1925,24 @@ gnutls_gost_paramset_t gnutls_oid_to_gost_paramset(const char *oid)
 		return GNUTLS_GOST_PARAMSET_CP_D;
 	else
 		return gnutls_assert_val(GNUTLS_GOST_PARAMSET_UNKNOWN);
+}
+
+int _gnutls_x509_get_version(asn1_node root, const char *name)
+{
+	uint8_t version[8];
+	int len, result;
+
+	len = sizeof(version);
+	result = asn1_read_value(root, name, version, &len);
+	if (result != ASN1_SUCCESS) {
+		if (result == ASN1_ELEMENT_NOT_FOUND)
+			return 1;	/* the DEFAULT version */
+		gnutls_assert();
+		return _gnutls_asn2err(result);
+	}
+
+	if (len != 1 || version[0] >= 0x80)
+		return gnutls_assert_val(GNUTLS_E_ASN1_DER_ERROR);
+
+	return (int) version[0] + 1;
 }

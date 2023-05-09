@@ -41,6 +41,9 @@ static int _gnutls_x509_read_ecc_pubkey(uint8_t * der, int dersize,
 static int _gnutls_x509_read_eddsa_pubkey(gnutls_ecc_curve_t curve,
 					  uint8_t * der, int dersize,
 					  gnutls_pk_params_st * params);
+static int _gnutls_x509_read_ecdh_pubkey(gnutls_ecc_curve_t curve,
+					 uint8_t * der, int dersize,
+					 gnutls_pk_params_st * params);
 static int _gnutls_x509_read_gost_pubkey(uint8_t * der, int dersize,
 					gnutls_pk_params_st * params);
 
@@ -58,7 +61,7 @@ _gnutls_x509_read_rsa_pubkey(uint8_t * der, int dersize,
 			     gnutls_pk_params_st * params)
 {
 	int result;
-	ASN1_TYPE spk = ASN1_TYPE_EMPTY;
+	asn1_node spk = NULL;
 
 	if ((result = asn1_create_element
 	     (_gnutls_get_gnutls_asn(), "GNUTLS.RSAPublicKey", &spk))
@@ -76,16 +79,15 @@ _gnutls_x509_read_rsa_pubkey(uint8_t * der, int dersize,
 	}
 
 
-	if ((result =
-	     _gnutls_x509_read_int(spk, "modulus",
-				   &params->params[0])) < 0) {
+	if (_gnutls_x509_read_int(spk, "modulus",
+				  &params->params[0]) < 0) {
 		gnutls_assert();
 		asn1_delete_structure(&spk);
 		return GNUTLS_E_ASN1_GENERIC_ERROR;
 	}
 
-	if ((result = _gnutls_x509_read_int(spk, "publicExponent",
-					    &params->params[1])) < 0) {
+	if (_gnutls_x509_read_int(spk, "publicExponent",
+				  &params->params[1]) < 0) {
 		gnutls_assert();
 		_gnutls_mpi_release(&params->params[0]);
 		asn1_delete_structure(&spk);
@@ -118,6 +120,17 @@ _gnutls_x509_read_ecc_pubkey(uint8_t * der, int dersize,
 int _gnutls_x509_read_eddsa_pubkey(gnutls_ecc_curve_t curve,
 				   uint8_t * der, int dersize,
 				   gnutls_pk_params_st * params)
+{
+	int size = gnutls_ecc_curve_get_size(curve);
+	if (dersize != size)
+		return gnutls_assert_val(GNUTLS_E_ILLEGAL_PARAMETER);
+
+	return _gnutls_set_datum(&params->raw_pub, der, dersize);
+}
+
+int _gnutls_x509_read_ecdh_pubkey(gnutls_ecc_curve_t curve,
+				  uint8_t * der, int dersize,
+				  gnutls_pk_params_st * params)
 {
 	int size = gnutls_ecc_curve_get_size(curve);
 	if (dersize != size)
@@ -176,7 +189,7 @@ _gnutls_x509_read_dsa_params(uint8_t * der, int dersize,
 			     gnutls_pk_params_st * params)
 {
 	int result;
-	ASN1_TYPE spk = ASN1_TYPE_EMPTY;
+	asn1_node spk = NULL;
 
 	if ((result = asn1_create_element
 	     (_gnutls_get_pkix(), "PKIX1.Dss-Parms",
@@ -200,8 +213,7 @@ _gnutls_x509_read_dsa_params(uint8_t * der, int dersize,
 
 	/* Read p */
 
-	if ((result =
-	     _gnutls_x509_read_int(spk, "p", &params->params[0])) < 0) {
+	if (_gnutls_x509_read_int(spk, "p", &params->params[0]) < 0) {
 		gnutls_assert();
 		asn1_delete_structure(&spk);
 		return GNUTLS_E_ASN1_GENERIC_ERROR;
@@ -209,8 +221,7 @@ _gnutls_x509_read_dsa_params(uint8_t * der, int dersize,
 
 	/* Read q */
 
-	if ((result =
-	     _gnutls_x509_read_int(spk, "q", &params->params[1])) < 0) {
+	if (_gnutls_x509_read_int(spk, "q", &params->params[1]) < 0) {
 		gnutls_assert();
 		asn1_delete_structure(&spk);
 		_gnutls_mpi_release(&params->params[0]);
@@ -219,8 +230,7 @@ _gnutls_x509_read_dsa_params(uint8_t * der, int dersize,
 
 	/* Read g */
 
-	if ((result =
-	     _gnutls_x509_read_int(spk, "g", &params->params[2])) < 0) {
+	if (_gnutls_x509_read_int(spk, "g", &params->params[2]) < 0) {
 		gnutls_assert();
 		asn1_delete_structure(&spk);
 		_gnutls_mpi_release(&params->params[0]);
@@ -245,7 +255,7 @@ _gnutls_x509_read_ecc_params(uint8_t * der, int dersize,
 			     unsigned int * curve)
 {
 	int ret;
-	ASN1_TYPE spk = ASN1_TYPE_EMPTY;
+	asn1_node spk = NULL;
 	char oid[MAX_OID_SIZE];
 	int oid_size;
 
@@ -298,8 +308,8 @@ _gnutls_x509_read_rsa_pss_params(uint8_t * der, int dersize,
 				 gnutls_x509_spki_st * params)
 {
 	int result;
-	ASN1_TYPE spk = ASN1_TYPE_EMPTY;
-	ASN1_TYPE c2 = ASN1_TYPE_EMPTY;
+	asn1_node spk = NULL;
+	asn1_node c2 = NULL;
 	gnutls_digest_algorithm_t digest;
 	char oid[MAX_OID_SIZE] = "";
 	int size;
@@ -446,7 +456,7 @@ _gnutls_x509_read_gost_params(uint8_t * der, int dersize,
 			      gnutls_pk_algorithm_t algo)
 {
 	int ret;
-	ASN1_TYPE spk = ASN1_TYPE_EMPTY;
+	asn1_node spk = NULL;
 	char oid[MAX_OID_SIZE];
 	int oid_size;
 	gnutls_ecc_curve_t curve;
@@ -568,6 +578,12 @@ int _gnutls_x509_read_pubkey(gnutls_pk_algorithm_t algo, uint8_t * der,
 	case GNUTLS_PK_EDDSA_ED448:
 		ret = _gnutls_x509_read_eddsa_pubkey(GNUTLS_ECC_CURVE_ED448, der, dersize, params);
 		break;
+	case GNUTLS_PK_ECDH_X25519:
+		ret = _gnutls_x509_read_ecdh_pubkey(GNUTLS_ECC_CURVE_X25519, der, dersize, params);
+		break;
+	case GNUTLS_PK_ECDH_X448:
+		ret = _gnutls_x509_read_ecdh_pubkey(GNUTLS_ECC_CURVE_X448, der, dersize, params);
+		break;
 	case GNUTLS_PK_GOST_01:
 	case GNUTLS_PK_GOST_12_256:
 	case GNUTLS_PK_GOST_12_512:
@@ -639,6 +655,8 @@ int _gnutls_x509_check_pubkey_params(gnutls_pk_params_st * params)
 	case GNUTLS_PK_ECDSA:
 	case GNUTLS_PK_EDDSA_ED25519:
 	case GNUTLS_PK_EDDSA_ED448:
+	case GNUTLS_PK_ECDH_X25519:
+	case GNUTLS_PK_ECDH_X448:
 	case GNUTLS_PK_GOST_01:
 	case GNUTLS_PK_GOST_12_256:
 	case GNUTLS_PK_GOST_12_512:

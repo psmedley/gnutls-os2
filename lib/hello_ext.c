@@ -57,6 +57,8 @@
 #include <num.h>
 #include <ext/client_cert_type.h>
 #include <ext/server_cert_type.h>
+#include <ext/compress_certificate.h>
+#include "intprops.h"
 
 static void
 unset_ext_data(gnutls_session_t session, const struct hello_ext_entry_st *, unsigned idx);
@@ -97,6 +99,7 @@ static hello_ext_entry_st const *extfunc[MAX_EXT_TYPES+1] = {
 	[GNUTLS_EXTENSION_RECORD_SIZE_LIMIT] = &ext_mod_record_size_limit,
 	[GNUTLS_EXTENSION_MAX_RECORD_SIZE] = &ext_mod_max_record_size,
 	[GNUTLS_EXTENSION_PSK_KE_MODES] = &ext_mod_psk_ke_modes,
+	[GNUTLS_EXTENSION_COMPRESS_CERTIFICATE] = &ext_mod_compress_certificate,
 	[GNUTLS_EXTENSION_PRE_SHARED_KEY] = &ext_mod_pre_shared_key,
 	/* This must be the last extension registered.
 	 */
@@ -520,7 +523,7 @@ int _gnutls_hello_ext_pack(gnutls_session_t session, gnutls_buffer_st *packed)
 	BUFFER_APPEND_NUM(packed, 0);
 
 	for (i = 0; i <= GNUTLS_EXTENSION_MAX_VALUE; i++) {
-		if (session->internals.used_exts & (1U << i)) {
+		if (session->internals.used_exts & ((ext_track_t)1 << i)) {
 
 			ext = gid_to_ext_entry(session, i);
 			if (ext == NULL)
@@ -789,7 +792,8 @@ gnutls_ext_register(const char *name, int id, gnutls_ext_parse_type_t parse_poin
 			gid = extfunc[i]->gid + 1;
 	}
 
-	if (gid > GNUTLS_EXTENSION_MAX_VALUE || gid >= sizeof(extfunc)/sizeof(extfunc[0]))
+	assert(gid < sizeof(extfunc)/sizeof(extfunc[0]));
+	if (gid > GNUTLS_EXTENSION_MAX_VALUE)
 		return gnutls_assert_val(GNUTLS_E_MEMORY_ERROR);
 
 	tmp_mod = gnutls_calloc(1, sizeof(*tmp_mod));
@@ -898,6 +902,7 @@ gnutls_session_ext_register(gnutls_session_t session,
 		return gnutls_assert_val(GNUTLS_E_MEMORY_ERROR);
 
 	memset(&tmp_mod, 0, sizeof(hello_ext_entry_st));
+	tmp_mod.name = gnutls_strdup(name);
 	tmp_mod.free_struct = 1;
 	tmp_mod.tls_id = id;
 	tmp_mod.gid = gid;
@@ -922,7 +927,13 @@ gnutls_session_ext_register(gnutls_session_t session,
 			tmp_mod.validity |= GNUTLS_EXT_FLAG_TLS;
 	}
 
-	exts = gnutls_realloc(session->internals.rexts, (session->internals.rexts_size+1)*sizeof(*exts));
+	if (unlikely(INT_ADD_OVERFLOW(session->internals.rexts_size, 1))) {
+		return gnutls_assert_val(GNUTLS_E_MEMORY_ERROR);
+	}
+
+	exts = _gnutls_reallocarray(session->internals.rexts,
+				    session->internals.rexts_size + 1,
+				    sizeof(*exts));
 	if (exts == NULL) {
 		return gnutls_assert_val(GNUTLS_E_MEMORY_ERROR);
 	}
@@ -1000,3 +1011,27 @@ unsigned gnutls_ext_get_current_msg(gnutls_session_t session)
 {
 	return _gnutls_ext_get_msg(session);
 }
+
+/**
+ * gnutls_ext_get_name2:
+ * @session: a #gnutls_session_t opaque pointer
+ * @tls_id: is a TLS extension numeric ID
+ * @parse_point: the parse type of the extension
+ *
+ * Convert a TLS extension numeric ID to a printable string.
+ *
+ * Returns: a pointer to a string that contains the name of the
+ *   specified cipher, or %NULL.
+ **/
+const char *gnutls_ext_get_name2(gnutls_session_t session, unsigned int tls_id,
+				 gnutls_ext_parse_type_t parse_point)
+{
+	const struct hello_ext_entry_st *ext;
+
+	ext = tls_id_to_ext_entry(session, tls_id, parse_point);
+	if (ext)
+		return ext->name;
+
+	return NULL;
+}
+

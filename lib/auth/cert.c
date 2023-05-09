@@ -64,6 +64,16 @@ typedef enum CertificateSigType { RSA_SIGN = 1, DSA_SIGN = 2, ECDSA_SIGN = 64,
 #endif
 } CertificateSigType;
 
+enum CertificateSigTypeFlags {
+	RSA_SIGN_FLAG = 1,
+	DSA_SIGN_FLAG = 1 << 1,
+	ECDSA_SIGN_FLAG = 1 << 2,
+#ifdef ENABLE_GOST
+	GOSTR34102012_256_SIGN_FLAG = 1 << 3,
+	GOSTR34102012_512_SIGN_FLAG = 1 << 4
+#endif
+};
+
 /* Moves data from an internal certificate struct (gnutls_pcert_st) to
  * another internal certificate struct (cert_auth_info_t), and deinitializes
  * the former.
@@ -127,7 +137,7 @@ check_pk_algo_in_list(const gnutls_pk_algorithm_t *
  */
 static int cert_get_issuer_dn(gnutls_pcert_st * cert, gnutls_datum_t * odn)
 {
-	ASN1_TYPE dn;
+	asn1_node dn;
 	int len, result;
 	int start, end;
 
@@ -780,6 +790,10 @@ _gnutls_proc_x509_crt(gnutls_session_t session,
 	}
 
 	info = _gnutls_get_auth_info(session, GNUTLS_CRD_CERTIFICATE);
+	if (unlikely(!info)) {
+		gnutls_assert();
+		return ret;
+	}
 
 	if (data == NULL || data_size == 0) {
 		gnutls_assert();
@@ -952,13 +966,17 @@ int _gnutls_proc_rawpk_crt(gnutls_session_t session,
 	}
 
 	ret = _gnutls_auth_info_init(session, GNUTLS_CRD_CERTIFICATE,
-															sizeof(cert_auth_info_st), 1);
+				     sizeof(cert_auth_info_st), 1);
 	if (ret < 0) {
 		gnutls_assert();
 		goto cleanup;
 	}
 
 	info = _gnutls_get_auth_info(session, GNUTLS_CRD_CERTIFICATE);
+	if (unlikely(!info)) {
+		gnutls_assert();
+		goto cleanup;
+	}
 
 	/* Copy our imported certificate into the auth info structure
 	 * and free our temporary cert storage peer_certificate.
@@ -1281,6 +1299,7 @@ _gnutls_gen_cert_server_cert_req(gnutls_session_t session,
 	uint8_t tmp_data[CERTTYPE_SIZE];
 	const version_entry_st *ver = get_version(session);
 	unsigned init_pos = data->length;
+	enum CertificateSigTypeFlags flags;
 
 	if (unlikely(ver == NULL))
 		return gnutls_assert_val(GNUTLS_E_INTERNAL_ERROR);
@@ -1297,18 +1316,71 @@ _gnutls_gen_cert_server_cert_req(gnutls_session_t session,
 		return GNUTLS_E_INSUFFICIENT_CREDENTIALS;
 	}
 
-	i = 1;
+	if (_gnutls_version_has_selectable_sighash(ver)) {
+		size_t j;
+
+		flags = 0;
+		for (j = 0; j < session->internals.priorities->sigalg.size; j++) {
+			const gnutls_sign_entry_st *se =
+				session->internals.priorities->sigalg.entry[j];
+			switch (se->pk) {
+			case GNUTLS_PK_RSA:
+			case GNUTLS_PK_RSA_PSS:
+				flags |= RSA_SIGN_FLAG;
+				break;
+			case GNUTLS_PK_DSA:
+				flags |= DSA_SIGN_FLAG;
+				break;
+			case GNUTLS_PK_ECDSA:
+				flags |= ECDSA_SIGN_FLAG;
+				break;
 #ifdef ENABLE_GOST
-	if (_gnutls_kx_is_vko_gost(session->security_parameters.cs->kx_algorithm)) {
-		tmp_data[i++] = GOSTR34102012_256_SIGN;
-		tmp_data[i++] = GOSTR34102012_512_SIGN;
-	} else
+			case GNUTLS_PK_GOST_12_256:
+				flags |= GOSTR34102012_256_SIGN_FLAG;
+				break;
+			case GNUTLS_PK_GOST_12_512:
+				flags |= GOSTR34102012_512_SIGN_FLAG;
+				break;
 #endif
-	{
+			default:
+				gnutls_assert();
+				_gnutls_debug_log(
+					"%s is unsupported for cert request\n",
+					gnutls_pk_get_name(se->pk));
+			}
+		}
+
+	} else {
+#ifdef ENABLE_GOST
+		if (_gnutls_kx_is_vko_gost(session->security_parameters.
+					   cs->kx_algorithm)) {
+			flags = GOSTR34102012_256_SIGN_FLAG |
+				GOSTR34102012_512_SIGN_FLAG;
+		} else
+#endif
+		{
+			flags = RSA_SIGN_FLAG | DSA_SIGN_FLAG | ECDSA_SIGN_FLAG;
+		}
+	}
+
+	i = 1;
+	if (flags & RSA_SIGN_FLAG) {
 		tmp_data[i++] = RSA_SIGN;
+	}
+	if (flags & DSA_SIGN_FLAG) {
 		tmp_data[i++] = DSA_SIGN;
+	}
+	if (flags & ECDSA_SIGN_FLAG) {
 		tmp_data[i++] = ECDSA_SIGN;
 	}
+#ifdef ENABLE_GOST
+	if (flags & GOSTR34102012_256_SIGN_FLAG) {
+		tmp_data[i++] = GOSTR34102012_256_SIGN;
+	}
+	if (flags & GOSTR34102012_512_SIGN_FLAG) {
+		tmp_data[i++] = GOSTR34102012_512_SIGN;
+	}
+#endif
 	tmp_data[0] = i - 1;
 
 	ret = _gnutls_buffer_append_data(data, tmp_data, i);

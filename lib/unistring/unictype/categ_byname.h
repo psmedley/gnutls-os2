@@ -593,7 +593,7 @@ static const struct named_category general_category_names[] =
     {(int)(size_t)&((struct general_category_stringpool_t *)0)->general_category_stringpool_str150, UC_CATEGORY_INDEX_Me}
   };
 
-const struct named_category *
+static const struct named_category *
 uc_general_category_lookup (register const char *str, register size_t len)
 {
   if (len <= MAX_WORD_LENGTH && len >= MIN_WORD_LENGTH)

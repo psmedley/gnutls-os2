@@ -52,6 +52,7 @@ int disable_system_calls(void)
 	}
 
 	ADD_SYSCALL(nanosleep, 0);
+	ADD_SYSCALL(clock_nanosleep, 0);
 	ADD_SYSCALL(time, 0);
 	ADD_SYSCALL(getpid, 0);
 	ADD_SYSCALL(gettimeofday, 0);
@@ -96,6 +97,9 @@ int disable_system_calls(void)
 	/* allow returning from signal handlers */
 	ADD_SYSCALL(sigreturn, 0);
 	ADD_SYSCALL(rt_sigreturn, 0);
+
+	/* used by gl_once_t implementation with pthread */
+	ADD_SYSCALL(futex, 0);
 
 	ret = seccomp_load(ctx);
 	if (ret < 0) {

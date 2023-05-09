@@ -28,6 +28,7 @@
 #include "gnutls_int.h"
 #include <constate.h>
 #include "errors.h"
+#include "fips.h"
 #include <kx.h>
 #include <algorithms.h>
 #include <num.h>
@@ -83,6 +84,8 @@ _gnutls_set_keys(gnutls_session_t session, record_parameters_st * params,
 	       session->security_parameters.client_random,
 	       GNUTLS_RANDOM_SIZE);
 
+	_gnutls_memory_mark_defined(session->security_parameters.master_secret,
+				    GNUTLS_MASTER_SIZE);
 #ifdef ENABLE_SSL3
 	if (get_num_version(session) == GNUTLS_SSL3) {	/* SSL 3 */
 		ret =
@@ -99,8 +102,11 @@ _gnutls_set_keys(gnutls_session_t session, record_parameters_st * params,
 				rnd, 2 * GNUTLS_RANDOM_SIZE, block_size,
 				key_block);
 
-	if (ret < 0)
+	if (ret < 0) {
+		_gnutls_memory_mark_undefined(session->security_parameters.master_secret,
+					      GNUTLS_MASTER_SIZE);
 		return gnutls_assert_val(ret);
+	}
 
 	_gnutls_hard_log("INT: KEY BLOCK[%d]: %s\n", block_size,
 			 _gnutls_bin2hex(key_block, block_size, buf,
@@ -336,11 +342,19 @@ _tls13_set_early_keys(gnutls_session_t session,
 		return GNUTLS_E_INVALID_REQUEST;
 	}
 
-	ret = _tls13_expand_secret(session, "key", 3, NULL, 0, session->key.proto.tls13.e_ckey, key_size, key_block);
+	ret = _tls13_expand_secret2(session->internals.
+				    resumed_security_parameters.prf,
+				    "key", 3, NULL, 0,
+				    session->key.proto.tls13.e_ckey,
+				    key_size, key_block);
 	if (ret < 0)
 		return gnutls_assert_val(ret);
 
-	ret = _tls13_expand_secret(session, "iv", 2, NULL, 0, session->key.proto.tls13.e_ckey, iv_size, iv_block);
+	ret = _tls13_expand_secret2(session->internals.
+				    resumed_security_parameters.prf,
+				    "iv", 2, NULL, 0,
+				    session->key.proto.tls13.e_ckey,
+				    iv_size, iv_block);
 	if (ret < 0)
 		return gnutls_assert_val(ret);
 
@@ -422,9 +436,11 @@ _tls13_set_keys(gnutls_session_t session, hs_stage_t stage,
 	if (ret < 0)
 		return gnutls_assert_val(ret);
 
-	_gnutls_nss_keylog_write(session, keylog_label,
-				 ckey,
-				 session->security_parameters.prf->output_size);
+	ret = _gnutls_call_keylog_func(session, keylog_label,
+				       ckey,
+				       session->security_parameters.prf->output_size);
+	if (ret < 0)
+		return gnutls_assert_val(ret);
 
 	/* client keys */
 	ret = _tls13_expand_secret(session, "key", 3, NULL, 0, ckey, key_size, ckey_block);
@@ -457,9 +473,11 @@ _tls13_set_keys(gnutls_session_t session, hs_stage_t stage,
 	if (ret < 0)
 		return gnutls_assert_val(ret);
 
-	_gnutls_nss_keylog_write(session, keylog_label,
-				 skey,
-				 session->security_parameters.prf->output_size);
+	ret = _gnutls_call_keylog_func(session, keylog_label,
+				       skey,
+				       session->security_parameters.prf->output_size);
+	if (ret < 0)
+		return gnutls_assert_val(ret);
 
 	ret = _tls13_expand_secret(session, "key", 3, NULL, 0, skey, key_size, skey_block);
 	if (ret < 0)
@@ -516,6 +534,10 @@ _tls13_set_keys(gnutls_session_t session, hs_stage_t stage,
 						 buf, sizeof(buf), NULL));
 	}
 
+	client_write->level = server_write->level = stage == STAGE_HS ?
+		GNUTLS_ENCRYPTION_LEVEL_HANDSHAKE :
+		GNUTLS_ENCRYPTION_LEVEL_APPLICATION;
+
 	return 0;
 }
 
@@ -555,8 +577,15 @@ _gnutls_init_record_state(record_parameters_st * params,
 				       (ver->id == GNUTLS_SSL3) ? 1 : 0,
 #endif
 				       1 - read /*1==encrypt */ );
-	if (ret < 0 && params->cipher->id != GNUTLS_CIPHER_NULL)
+	if (ret < 0 && params->cipher->id != GNUTLS_CIPHER_NULL) {
+		_gnutls_switch_fips_state(GNUTLS_FIPS140_OP_ERROR);
 		return gnutls_assert_val(ret);
+	}
+	
+	if (is_cipher_algo_allowed(params->cipher->id))
+		_gnutls_switch_fips_state(GNUTLS_FIPS140_OP_APPROVED);
+	else
+		_gnutls_switch_fips_state(GNUTLS_FIPS140_OP_NOT_APPROVED);
 
 	return 0;
 }
@@ -584,10 +613,19 @@ _gnutls_set_cipher_suite2(gnutls_session_t session,
 			return gnutls_assert_val(GNUTLS_E_RECEIVED_ILLEGAL_PARAMETER);
 
 		return 0;
-	} else {
-		if (params->initialized
-		    || params->cipher != NULL || params->mac != NULL)
-			return gnutls_assert_val(GNUTLS_E_INTERNAL_ERROR);
+	}
+
+	/* The params shouldn't have been initialized at this point, unless we
+	 * are doing trial encryption/decryption of early data.
+	 */
+	if (unlikely
+	    (!((session->internals.hsk_flags & HSK_EARLY_DATA_IN_FLIGHT &&
+		!IS_SERVER(session)) ||
+	       (session->internals.hsk_flags & HSK_EARLY_DATA_ACCEPTED &&
+		IS_SERVER(session))) &&
+	     (params->initialized
+	      || params->cipher != NULL || params->mac != NULL))) {
+		return gnutls_assert_val(GNUTLS_E_INTERNAL_ERROR);
 	}
 
 	if (_gnutls_cipher_is_ok(cipher_algo) == 0
@@ -647,7 +685,10 @@ int _gnutls_epoch_set_keys(gnutls_session_t session, uint16_t epoch, hs_stage_t 
 	int key_size;
 	record_parameters_st *params;
 	int ret;
-	const version_entry_st *ver = get_version(session);
+	const version_entry_st *ver =
+		stage == STAGE_EARLY && !IS_SERVER(session) ?
+		session->internals.resumed_security_parameters.pversion :
+		get_version(session);
 
 	if (unlikely(ver == NULL))
 		return gnutls_assert_val(GNUTLS_E_INTERNAL_ERROR);
@@ -737,29 +778,6 @@ int _gnutls_epoch_set_keys(gnutls_session_t session, uint16_t epoch, hs_stage_t 
 	return 0;
 }
 
-/* This copies the session values which apply to subsequent/resumed
- * sessions. Under TLS 1.3, these values are items which are not
- * negotiated on the subsequent session. */
-#define CPY_COMMON(tls13_sem) \
-	if (!tls13_sem) { \
-		dst->cs = src->cs; \
-		memcpy(dst->master_secret, src->master_secret, GNUTLS_MASTER_SIZE); \
-		memcpy(dst->client_random, src->client_random, GNUTLS_RANDOM_SIZE); \
-		memcpy(dst->server_random, src->server_random, GNUTLS_RANDOM_SIZE); \
-		dst->ext_master_secret = src->ext_master_secret; \
-		dst->etm = src->etm; \
-		dst->prf = src->prf; \
-		dst->grp = src->grp; \
-		dst->pversion = src->pversion; \
-	} \
-	memcpy(dst->session_id, src->session_id, GNUTLS_MAX_SESSION_ID_SIZE); \
-	dst->session_id_size = src->session_id_size; \
-	dst->timestamp = src->timestamp; \
-	dst->client_ctype = src->client_ctype; \
-	dst->server_ctype = src->server_ctype; \
-	dst->client_auth_type = src->client_auth_type; \
-	dst->server_auth_type = src->server_auth_type
-
 void _gnutls_set_resumed_parameters(gnutls_session_t session)
 {
 	security_parameters_st *src =
@@ -767,7 +785,29 @@ void _gnutls_set_resumed_parameters(gnutls_session_t session)
 	security_parameters_st *dst = &session->security_parameters;
 	const version_entry_st *ver = get_version(session);
 
-	CPY_COMMON(ver->tls13_sem);
+	/* Under TLS 1.3, these values are items which are not
+	 * negotiated on the subsequent session. */
+	if (!ver->tls13_sem) {
+		dst->cs = src->cs;
+		_gnutls_memory_mark_defined(dst->master_secret, GNUTLS_MASTER_SIZE);
+		memcpy(dst->master_secret, src->master_secret, GNUTLS_MASTER_SIZE);
+		_gnutls_memory_mark_defined(dst->client_random, GNUTLS_RANDOM_SIZE);
+		memcpy(dst->client_random, src->client_random, GNUTLS_RANDOM_SIZE);
+		_gnutls_memory_mark_defined(dst->server_random, GNUTLS_RANDOM_SIZE);
+		memcpy(dst->server_random, src->server_random, GNUTLS_RANDOM_SIZE);
+		dst->ext_master_secret = src->ext_master_secret;
+		dst->etm = src->etm;
+		dst->prf = src->prf;
+		dst->grp = src->grp;
+		dst->pversion = src->pversion;
+	}
+	memcpy(dst->session_id, src->session_id, GNUTLS_MAX_SESSION_ID_SIZE);
+	dst->session_id_size = src->session_id_size;
+	dst->timestamp = src->timestamp;
+	dst->client_ctype = src->client_ctype;
+	dst->server_ctype = src->server_ctype;
+	dst->client_auth_type = src->client_auth_type;
+	dst->server_auth_type = src->server_auth_type;
 
 	if (!ver->tls13_sem &&
 	    !(session->internals.hsk_flags & HSK_RECORD_SIZE_LIMIT_NEGOTIATED)) {
@@ -806,7 +846,7 @@ int _gnutls_read_connection_state_init(gnutls_session_t session)
 	/* Update internals from CipherSuite selected.
 	 * If we are resuming just copy the connection session
 	 */
-	if (session->internals.resumed != RESUME_FALSE &&
+	if (session->internals.resumed &&
 	    session->security_parameters.entity == GNUTLS_CLIENT)
 		_gnutls_set_resumed_parameters(session);
 
@@ -842,7 +882,7 @@ int _gnutls_write_connection_state_init(gnutls_session_t session)
 /* Update internals from CipherSuite selected.
  * If we are resuming just copy the connection session
  */
-	if (session->internals.resumed != RESUME_FALSE &&
+	if (session->internals.resumed &&
 	    session->security_parameters.entity == GNUTLS_SERVER)
 		_gnutls_set_resumed_parameters(session);
 
@@ -1101,6 +1141,72 @@ _gnutls_epoch_free(gnutls_session_t session, record_parameters_st * params)
 	gnutls_free(params);
 }
 
+static int
+_gnutls_call_secret_func(gnutls_session_t session,
+			 hs_stage_t stage,
+			 bool for_read, bool for_write)
+{
+	const mac_entry_st *prf = NULL;
+	gnutls_record_encryption_level_t level;
+	void *secret_read = NULL, *secret_write = NULL;
+
+	if (session->internals.h_secret_func == NULL)
+		return 0;
+
+	switch (stage) {
+	case STAGE_EARLY:
+		prf = session->key.binders[0].prf;
+		level = GNUTLS_ENCRYPTION_LEVEL_EARLY;
+		if (for_read) {
+			if (unlikely(session->security_parameters.entity == GNUTLS_CLIENT))
+				return gnutls_assert_val(GNUTLS_E_INTERNAL_ERROR);
+			secret_read = session->key.proto.tls13.e_ckey;
+		}
+		if (for_write) {
+			if (unlikely(session->security_parameters.entity == GNUTLS_SERVER))
+				return gnutls_assert_val(GNUTLS_E_INTERNAL_ERROR);
+			secret_write = session->key.proto.tls13.e_ckey;
+		}
+		break;
+	case STAGE_HS:
+		prf = session->security_parameters.prf;
+		level = GNUTLS_ENCRYPTION_LEVEL_HANDSHAKE;
+		if (for_read)
+			secret_read = session->security_parameters.
+				entity == GNUTLS_CLIENT ?
+				session->key.proto.tls13.hs_skey :
+				session->key.proto.tls13.hs_ckey;
+		if (for_write)
+			secret_write = session->security_parameters.
+				entity == GNUTLS_CLIENT ?
+				session->key.proto.tls13.hs_ckey :
+				session->key.proto.tls13.hs_skey;
+		break;
+	case STAGE_APP:
+	case STAGE_UPD_OURS:
+	case STAGE_UPD_PEERS:
+		prf = session->security_parameters.prf;
+		level = GNUTLS_ENCRYPTION_LEVEL_APPLICATION;
+		if (for_read)
+			secret_read = session->security_parameters.
+				entity == GNUTLS_CLIENT ?
+				session->key.proto.tls13.ap_skey :
+				session->key.proto.tls13.ap_ckey;
+		if (for_write)
+			secret_write = session->security_parameters.
+				entity == GNUTLS_CLIENT ?
+				session->key.proto.tls13.ap_ckey :
+				session->key.proto.tls13.ap_skey;
+		break;
+	default:
+		return gnutls_assert_val(GNUTLS_E_INTERNAL_ERROR);
+	}
+
+	return session->internals.h_secret_func(session, level,
+						secret_read, secret_write,
+						prf->output_size);
+}
+
 int _tls13_connection_state_init(gnutls_session_t session, hs_stage_t stage)
 {
 	const uint16_t epoch_next =
@@ -1118,6 +1224,10 @@ int _tls13_connection_state_init(gnutls_session_t session, hs_stage_t stage)
 	session->security_parameters.epoch_read = epoch_next;
 	session->security_parameters.epoch_write = epoch_next;
 
+	ret = _gnutls_call_secret_func(session, stage, 1, 1);
+	if (ret < 0)
+		return gnutls_assert_val(ret);
+
 	return 0;
 }
 
@@ -1127,15 +1237,25 @@ int _tls13_read_connection_state_init(gnutls_session_t session, hs_stage_t stage
 	    session->security_parameters.epoch_next;
 	int ret;
 
+	if (unlikely(stage == STAGE_EARLY && !IS_SERVER(session))) {
+		return gnutls_assert_val(GNUTLS_E_INTERNAL_ERROR);
+	}
+
 	ret = _gnutls_epoch_set_keys(session, epoch_next, stage);
 	if (ret < 0)
 		return ret;
 
 	_gnutls_handshake_log("HSK[%p]: TLS 1.3 set read key with cipher suite: %s\n",
 			      session,
+			      stage == STAGE_EARLY ?
+			      session->internals.resumed_security_parameters.cs->name :
 			      session->security_parameters.cs->name);
 
 	session->security_parameters.epoch_read = epoch_next;
+
+	ret = _gnutls_call_secret_func(session, stage, 1, 0);
+	if (ret < 0)
+		return gnutls_assert_val(ret);
 
 	return 0;
 }
@@ -1146,15 +1266,25 @@ int _tls13_write_connection_state_init(gnutls_session_t session, hs_stage_t stag
 	    session->security_parameters.epoch_next;
 	int ret;
 
+	if (unlikely(stage == STAGE_EARLY && IS_SERVER(session))) {
+		return gnutls_assert_val(GNUTLS_E_INTERNAL_ERROR);
+	}
+
 	ret = _gnutls_epoch_set_keys(session, epoch_next, stage);
 	if (ret < 0)
 		return ret;
 
 	_gnutls_handshake_log("HSK[%p]: TLS 1.3 set write key with cipher suite: %s\n",
 			      session,
+			      stage == STAGE_EARLY ?
+			      session->internals.resumed_security_parameters.cs->name :
 			      session->security_parameters.cs->name);
 
 	session->security_parameters.epoch_write = epoch_next;
+
+	ret = _gnutls_call_secret_func(session, stage, 0, 1);
+	if (ret < 0)
+		return gnutls_assert_val(ret);
 
 	return 0;
 }
@@ -1168,13 +1298,36 @@ _tls13_init_record_state(gnutls_cipher_algorithm_t algo, record_state_st *state)
 	key.data = state->key;
 	key.size = state->key_size;
 
-	ret = _gnutls_aead_cipher_init(&state->ctx.aead,
-				       algo, &key);
-	if (ret < 0)
+	ret = _gnutls_aead_cipher_init(&state->ctx.aead, algo, &key);
+	if (ret < 0) {
+		_gnutls_switch_fips_state(GNUTLS_FIPS140_OP_ERROR);
 		return gnutls_assert_val(ret);
+	}
+
+	if (is_cipher_algo_allowed(algo))
+		_gnutls_switch_fips_state(GNUTLS_FIPS140_OP_APPROVED);
+	else
+		_gnutls_switch_fips_state(GNUTLS_FIPS140_OP_NOT_APPROVED);
 
 	state->aead_tag_size = gnutls_cipher_get_tag_size(algo);
 	state->is_aead = 1;
 
 	return 0;
+}
+
+/**
+ * gnutls_handshake_set_secret_function:
+ * @session: is a #gnutls_session_t type.
+ * @func: the secret func
+ *
+ * This function will set a callback to be called when a new traffic
+ * secret is installed.
+ *
+ * Since: 3.7.0
+ */
+void
+gnutls_handshake_set_secret_function(gnutls_session_t session,
+				     gnutls_handshake_secret_func func)
+{
+	session->internals.h_secret_func = func;
 }

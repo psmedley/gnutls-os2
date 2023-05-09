@@ -93,7 +93,7 @@ static void client(int fd, unsigned send_cert, unsigned max_auths)
 	 */
 	assert(gnutls_init(&session, GNUTLS_CLIENT|GNUTLS_POST_HANDSHAKE_AUTH)>=0);
 
-	gnutls_handshake_set_timeout(session, 20 * 1000);
+	gnutls_handshake_set_timeout(session, get_timeout());
 
 	ret = gnutls_priority_set_direct(session, "NORMAL:-VERS-ALL:+VERS-TLS1.3:+VERS-TLS1.2:+VERS-TLS1.0", NULL);
 	if (ret < 0)
@@ -155,7 +155,7 @@ static void client(int fd, unsigned send_cert, unsigned max_auths)
 		} while (ret == GNUTLS_E_AGAIN || ret == GNUTLS_E_INTERRUPTED);
 
 		if (ret != 0)
-			fail("client: gnutls_reauth did not succeed as expected: %s\n", gnutls_strerror(ret));
+			fail("client: gnutls_reauth %d did not succeed as expected: %s\n", i, gnutls_strerror(ret));
 	}
 
 
@@ -203,7 +203,7 @@ static int hellos_callback(gnutls_session_t session, unsigned int htype,
 	return 0;
 }
 
-static void server(int fd, int err, int type, unsigned max_auths)
+static void server(int fd, int err, int type, unsigned max_auths, int child)
 {
 	int ret;
 	char buffer[MAX_BUF + 1];
@@ -228,7 +228,7 @@ static void server(int fd, int err, int type, unsigned max_auths)
 
 	gnutls_init(&session, GNUTLS_SERVER|GNUTLS_POST_HANDSHAKE_AUTH);
 
-	gnutls_handshake_set_timeout(session, 20 * 1000);
+	gnutls_handshake_set_timeout(session, get_timeout());
 	gnutls_handshake_set_hook_function(session, GNUTLS_HANDSHAKE_ANY,
 					   GNUTLS_HOOK_BOTH,
 					   hellos_callback);
@@ -314,6 +314,8 @@ static void server(int fd, int err, int type, unsigned max_auths)
 			fail("server: gnutls_reauth did not succeed as expected: %s\n", gnutls_strerror(ret));
 	}
 
+	waitpid(child, NULL, 0);
+
 	close(fd);
 	gnutls_deinit(session);
 
@@ -364,8 +366,7 @@ void start(const char *name, int err, int type, unsigned max_auths, unsigned sen
 	if (child) {
 		/* parent */
 		close(fd[1]);
-		server(fd[0], err, type, max_auths);
-		kill(child, SIGTERM);
+		server(fd[0], err, type, max_auths, child);
 	} else {
 		close(fd[0]);
 		client(fd[1], send_cert, max_auths);

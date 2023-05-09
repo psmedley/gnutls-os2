@@ -50,7 +50,7 @@
 
 #include <certtool-cfg.h>
 #include <common.h>
-#include "certtool-args.h"
+#include "certtool-options.h"
 #include "certtool-common.h"
 
 #define MAX_HASH_SIZE 64
@@ -197,7 +197,7 @@ generate_private_key_int(common_info_st * cinfo)
 
 	if (provable && (!GNUTLS_PK_IS_RSA(key_type) && key_type != GNUTLS_PK_DSA)) {
 		fprintf(stderr,
-			"The --provable parameter cannot be used with ECDSA keys.\n");
+			"The --provable parameter can only be used with RSA and DSA keys.\n");
 		app_exit(1);
 	}
 
@@ -206,8 +206,12 @@ generate_private_key_int(common_info_st * cinfo)
 			"Note that DSA keys with size over 1024 may cause incompatibility problems when used with earlier than TLS 1.2 versions.\n\n");
 
 	if ((HAVE_OPT(SEED) || provable) && GNUTLS_PK_IS_RSA(key_type)) {
-		if (bits != 2048 && bits != 3072) {
-			fprintf(stderr, "Note that the FIPS 186-4 key generation restricts keys to 2048 and 3072 bits\n");
+		/* Keep in sync with seed_length_for_modulus_size in
+		 * lib/nettle/int/rsa-keygen-fips186.c. */
+		if (bits != 2048 && bits != 3072 && bits != 4096 &&
+		    bits != 6144 && bits != 7680 && bits != 8192 &&
+		    bits != 15360) {
+			fprintf(stderr, "Note that the FIPS 186-4 key generation restricts keys to be of known lengths (2048, 3072, etc)\n");
 		}
 	}
 
@@ -225,7 +229,15 @@ generate_private_key_int(common_info_st * cinfo)
 		kdata[kdata_size++].size = cinfo->seed_size;
 
 		if (GNUTLS_PK_IS_RSA(key_type)) {
-			if ((bits == 3072 && cinfo->seed_size != 32) || (bits == 2048 && cinfo->seed_size != 28)) {
+			/* Keep in sync with seed_length_for_modulus_size in
+			 * lib/nettle/int/rsa-keygen-fips186.c. */
+			if ((bits == 2048 && cinfo->seed_size != 28) ||
+			    (bits == 3072 && cinfo->seed_size != 32) ||
+			    (bits == 4096 && cinfo->seed_size != 38) ||
+			    (bits == 6144 && cinfo->seed_size != 44) ||
+			    (bits == 7680 && cinfo->seed_size != 48) ||
+			    (bits == 8192 && cinfo->seed_size != 50) ||
+			    (bits == 15360 && cinfo->seed_size != 64)) {
 				fprintf(stderr, "The seed size (%d) doesn't match the size of the request security level; use -d 2 for more information.\n", (int)cinfo->seed_size);
 			}
 		} else if (key_type == GNUTLS_PK_DSA) {
@@ -363,13 +375,13 @@ generate_certificate(gnutls_privkey_t * ret_key,
 		} else {
 			get_dn_crt_set(crt);
 
+			get_country_crt_set(crt);
+			get_state_crt_set(crt);
+			get_locality_crt_set(crt);
+			get_organization_crt_set(crt);
+			get_unit_crt_set(crt);
 			get_cn_crt_set(crt);
 			get_uid_crt_set(crt);
-			get_unit_crt_set(crt);
-			get_organization_crt_set(crt);
-			get_locality_crt_set(crt);
-			get_state_crt_set(crt);
-			get_country_crt_set(crt);
 			get_dc_set(TYPE_CRT, crt);
 
 			get_oid_crt_set(crt);
@@ -566,6 +578,10 @@ generate_certificate(gnutls_privkey_t * ret_key,
 				if (result)
 					usage |=
 					    GNUTLS_KEY_KEY_ENCIPHERMENT;
+			} else if (pk == GNUTLS_PK_ECDH_X25519 ||
+                                   pk == GNUTLS_PK_ECDH_X448) {
+                                /* X25519 and X448 are only for key agreement. */
+                                usage |= GNUTLS_KEY_KEY_AGREEMENT;
 			} else {
 				usage |= GNUTLS_KEY_DIGITAL_SIGNATURE;
 			}
@@ -781,10 +797,8 @@ generate_certificate(gnutls_privkey_t * ret_key,
 	/* always set CRL distribution points on CAs, but also on certificates
 	 * generated with --generate-self-signed. The latter is to retain
 	 * compatibility with previous versions of certtool. */
-	if (ca_status || (!proxy && ca_crt == NULL)) {
+	if (ca_status || !proxy) {
 		get_crl_dist_point_set(crt);
-	} else if (!proxy && ca_crt != NULL) {
-		gnutls_x509_crt_cpy_crl_dist_points(crt, ca_crt);
 	}
 
 	*ret_key = key;
@@ -1263,12 +1277,12 @@ static void cmd_parser(int argc, char **argv)
 
 	fix_lbuffer(0);
 
-	if (HAVE_OPT(INDER) || HAVE_OPT(INRAW))
+	if (HAVE_OPT(INDER))
 		incert_format = GNUTLS_X509_FMT_DER;
 	else
 		incert_format = GNUTLS_X509_FMT_PEM;
 
-	if (HAVE_OPT(OUTDER) || HAVE_OPT(OUTRAW))
+	if (HAVE_OPT(OUTDER))
 		outcert_format = GNUTLS_X509_FMT_DER;
 	else
 		outcert_format = GNUTLS_X509_FMT_PEM;
@@ -1425,10 +1439,10 @@ static void cmd_parser(int argc, char **argv)
 	}
 
 	if (HAVE_OPT(VERIFY_PROFILE)) {
-		if (strcasecmp(OPT_ARG(VERIFY_PROFILE), "none")) {
-			cinfo.verification_profile = GNUTLS_PROFILE_UNKNOWN;
+		if (strcasecmp(OPT_ARG(VERIFY_PROFILE), "none") == 0) {
+			cinfo.verification_profile = (gnutls_sec_param_t)GNUTLS_PROFILE_UNKNOWN;
 		} else {
-			cinfo.verification_profile = gnutls_certificate_verification_profile_get_id(OPT_ARG(VERIFY_PROFILE));
+			cinfo.verification_profile = (gnutls_sec_param_t)gnutls_certificate_verification_profile_get_id(OPT_ARG(VERIFY_PROFILE));
 		}
 	} else if (!HAVE_OPT(VERIFY_ALLOW_BROKEN)) {
 		if (HAVE_OPT(VERIFY_CHAIN) || HAVE_OPT(VERIFY)) {
@@ -1530,7 +1544,7 @@ void certificate_info(int pubkey, common_info_st * cinfo)
 	gnutls_datum_t pem;
 	unsigned int crt_num;
 
-	pem.data = (void *) fread_file(infile, &size);
+	pem.data = (void *) fread_file(infile, 0, &size);
 	pem.size = size;
 
 	if (!pem.data) {
@@ -1651,7 +1665,7 @@ void crl_info(common_info_st *cinfo)
 		app_exit(1);
 	}
 
-	pem.data = (void *) fread_file(infile, &size);
+	pem.data = (void *) fread_file(infile, 0, &size);
 	pem.size = size;
 
 	if (!pem.data) {
@@ -1723,7 +1737,7 @@ void crq_info(common_info_st *cinfo)
 		app_exit(1);
 	}
 
-	pem.data = (void *) fread_file(infile, &size);
+	pem.data = (void *) fread_file(infile, 0, &size);
 	pem.size = size;
 
 	if (!pem.data) {
@@ -1925,15 +1939,15 @@ void generate_request(common_info_st * cinfo)
 	 */
 	get_dn_crq_set(crq);
 
-	get_cn_crq_set(crq);
-	get_unit_crq_set(crq);
-	get_organization_crq_set(crq);
-	get_locality_crq_set(crq);
-	get_state_crq_set(crq);
 	get_country_crq_set(crq);
+	get_state_crq_set(crq);
+	get_locality_crq_set(crq);
+	get_organization_crq_set(crq);
+	get_unit_crq_set(crq);
+	get_cn_crq_set(crq);
 
-	get_dc_set(TYPE_CRQ, crq);
 	get_uid_crq_set(crq);
+	get_dc_set(TYPE_CRQ, crq);
 	get_oid_crq_set(crq);
 
 	get_dns_name_set(TYPE_CRQ, crq);
@@ -2241,7 +2255,7 @@ static void load_data(common_info_st *cinfo, gnutls_datum_t *data)
 		app_exit(1);
 	}
 
-	data->data = (void *) fread_file(fp, &size);
+	data->data = (void *) fread_file(fp, 0, &size);
 	if (data->data == NULL) {
 		fprintf(stderr, "Error reading data file");
 		app_exit(1);
@@ -2513,7 +2527,7 @@ static void verify_chain(common_info_st * cinfo)
 		app_exit(1);
 	}
 
-	buf = (void *) fread_file(infile, &size);
+	buf = (void *) fread_file(infile, 0, &size);
 	if (buf == NULL) {
 		fprintf(stderr, "Error reading certificate chain");
 		app_exit(1);
@@ -2530,7 +2544,7 @@ static void verify_certificate(common_info_st * cinfo)
 	char *cas = NULL;
 	size_t cert_size;
 
-	cert = (void *) fread_file(infile, &cert_size);
+	cert = (void *) fread_file(infile, 0, &cert_size);
 	if (cert == NULL) {
 		fprintf(stderr, "Error reading certificate chain");
 		app_exit(1);
@@ -2573,7 +2587,7 @@ void verify_crl(common_info_st * cinfo)
 		app_exit(1);
 	}
 
-	pem.data = (void *) fread_file(infile, &size);
+	pem.data = (void *) fread_file(infile, 0, &size);
 	pem.size = size;
 
 	if (!pem.data) {
@@ -2624,94 +2638,20 @@ void verify_crl(common_info_st * cinfo)
 	app_exit(rc);
 }
 
-static void print_dn(const char *prefix, const gnutls_datum_t *raw)
-{
-	gnutls_x509_dn_t dn = NULL;
-	gnutls_datum_t str = {NULL, 0};
-	int ret;
-
-	ret = gnutls_x509_dn_init(&dn);
-	if (ret < 0)
-		return;
-
-	ret = gnutls_x509_dn_import(dn, raw);
-	if (ret < 0)
-		goto cleanup;
-
-	ret = gnutls_x509_dn_get_str2(dn, &str, 0);
-	if (ret < 0)
-		goto cleanup;
-
-	fprintf(outfile, "%s: %s\n", prefix, str.data);
-
- cleanup:
-	gnutls_x509_dn_deinit(dn);
-	gnutls_free(str.data);
-}
-
-static void print_raw(const char *prefix, const gnutls_datum_t *raw)
+static void print_pkcs7_sig_info(gnutls_pkcs7_signature_info_st *info, common_info_st *cinfo)
 {
 	int ret;
-	gnutls_datum_t tmp;
+	gnutls_datum_t str;
 
-	if (raw->data == NULL || raw->size == 0)
-		return;
-
-	ret = gnutls_hex_encode2(raw, &tmp);
+	ret = gnutls_pkcs7_print_signature_info(info, GNUTLS_CRT_PRINT_COMPACT, &str);
 	if (ret < 0) {
-		fprintf(stderr, "gnutls_hex_encode2: %s\n",
-			gnutls_strerror(ret));
+		fprintf(stderr, "printing error: %s\n",
+				gnutls_strerror(ret));
 		app_exit(1);
 	}
 
-	fprintf(outfile, "%s: %s\n", prefix, tmp.data);
-	gnutls_free(tmp.data);
-}
-
-static void print_pkcs7_sig_info(gnutls_pkcs7_signature_info_st *info, common_info_st *cinfo)
-{
-	unsigned i;
-	char *oid;
-	gnutls_datum_t data;
-	char prefix[128];
-	int ret;
-	char timebuf[SIMPLE_CTIME_BUF_SIZE];
-
-	print_dn("\tSigner's issuer DN", &info->issuer_dn);
-	print_raw("\tSigner's serial", &info->signer_serial);
-	print_raw("\tSigner's issuer key ID", &info->issuer_keyid);
-	if (info->signing_time != -1)
-		fprintf(outfile, "\tSigning time: %s\n", simple_ctime(&info->signing_time, timebuf));
-
-	fprintf(outfile, "\tSignature Algorithm: %s\n", gnutls_sign_get_name(info->algo));
-
-	if (info->signed_attrs) {
-		for (i=0;;i++) {
-			ret = gnutls_pkcs7_get_attr(info->signed_attrs, i, &oid, &data, 0);
-			if (ret < 0)
-				break;
-			if (i==0)
-				fprintf(outfile, "\tSigned Attributes:\n");
-
-			snprintf(prefix, sizeof(prefix), "\t\t%s", oid);
-			print_raw(prefix, &data);
-			gnutls_free(data.data);
-		}
-	}
-	if (info->unsigned_attrs) {
-		for (i=0;;i++) {
-			ret = gnutls_pkcs7_get_attr(info->unsigned_attrs, i, &oid, &data, 0);
-			if (ret < 0)
-				break;
-			if (i==0)
-				fprintf(outfile, "\tUnsigned Attributes:\n");
-
-			snprintf(prefix, sizeof(prefix), "\t\t%s", oid);
-			print_raw(prefix, &data);
-			gnutls_free(data.data);
-		}
-	}
-	fprintf(outfile, "\n");
+	fprintf(outfile, "%s", str.data);
+	gnutls_free(str.data);
 }
 
 void verify_pkcs7(common_info_st * cinfo, const char *purpose, unsigned display_data)
@@ -2735,7 +2675,7 @@ void verify_pkcs7(common_info_st * cinfo, const char *purpose, unsigned display_
 		app_exit(1);
 	}
 
-	data.data = (void *) fread_file(infile, &size);
+	data.data = (void *) fread_file(infile, 0, &size);
 	data.size = size;
 
 	if (!data.data) {
@@ -2859,7 +2799,7 @@ void pkcs7_sign(common_info_st * cinfo, unsigned embed)
 		app_exit(1);
 	}
 
-	data.data = (void *) fread_file(infile, &size);
+	data.data = (void *) fread_file(infile, 0, &size);
 	data.size = size;
 
 	if (!data.data) {
@@ -3030,9 +2970,9 @@ void generate_pkcs12(common_info_st * cinfo)
 	}
 
 	if (cinfo->hash != GNUTLS_DIG_UNKNOWN)
-		mac = cinfo->hash;
+		mac = (gnutls_mac_algorithm_t)cinfo->hash;
 	else
-		mac = GNUTLS_MAC_SHA1;
+		mac = GNUTLS_MAC_SHA256;
 
 	if (HAVE_OPT(P12_NAME)) {
 		name = OPT_ARG(P12_NAME);
@@ -3101,7 +3041,8 @@ void generate_pkcs12(common_info_st * cinfo)
 			app_exit(1);
 		}
 
-		result = gnutls_pkcs12_bag_encrypt(bag, pass, flags);
+		if (!(flags & GNUTLS_PKCS_PLAIN) || cinfo->empty_password)
+			result = gnutls_pkcs12_bag_encrypt(bag, pass, flags);
 		if (result < 0) {
 			fprintf(stderr, "bag_encrypt: %s\n",
 				gnutls_strerror(result));
@@ -3478,7 +3419,7 @@ void pkcs12_info(common_info_st * cinfo)
 		app_exit(1);
 	}
 
-	data.data = (void *) fread_file(infile, &size);
+	data.data = (void *) fread_file(infile, 0, &size);
 	data.size = size;
 
 	if (!data.data) {
@@ -3667,7 +3608,7 @@ void pkcs8_info(void)
 	size_t size;
 	gnutls_datum_t data;
 
-	data.data = (void *) fread_file(infile, &size);
+	data.data = (void *) fread_file(infile, 0, &size);
 	data.size = size;
 
 	if (!data.data) {
@@ -3692,7 +3633,7 @@ void pkcs7_info(common_info_st *cinfo, unsigned display_data)
 		app_exit(1);
 	}
 
-	data.data = (void *) fread_file(infile, &size);
+	data.data = (void *) fread_file(infile, 0, &size);
 	data.size = size;
 
 	if (!data.data) {
@@ -3861,7 +3802,7 @@ gnutls_pubkey_t find_pubkey(gnutls_x509_crt_t crt, common_info_st * cinfo)
 			pubkey = load_pubkey(0, cinfo);
 
 			if (pubkey == NULL) { /* load from stdin */
-				pem.data = (void *) fread_file(infile, &size);
+				pem.data = (void *) fread_file(infile, 0, &size);
 				pem.size = size;
 
 				if (!pem.data) {
@@ -4005,7 +3946,7 @@ void certificate_fpr(common_info_st * cinfo)
 	crt = load_cert(0, cinfo);
 
 	if (crt == NULL) {
-		pem.data = (void *) fread_file(infile, &size);
+		pem.data = (void *) fread_file(infile, 0, &size);
 		pem.size = size;
 
 		if (!pem.data) {

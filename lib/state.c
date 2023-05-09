@@ -54,6 +54,7 @@
 #include "tls13/session_ticket.h"
 #include "ext/cert_types.h"
 #include "locks.h"
+#include "kx.h"
 
 /* to be used by supplemental data support to disable TLS1.3
  * when supplemental data have been globally registered */
@@ -85,6 +86,40 @@ gnutls_cipher_algorithm_t gnutls_cipher_get(gnutls_session_t session)
 		return gnutls_assert_val(GNUTLS_CIPHER_NULL);
 
 	return record_params->cipher->id;
+}
+
+/**
+ * gnutls_early_cipher_get:
+ * @session: is a #gnutls_session_t type.
+ *
+ * Get the cipher algorithm used for encrypting early data.
+ *
+ * Returns: the cipher used for early data, a
+ *   #gnutls_cipher_algorithm_t type.
+ *
+ * Since: 3.7.2
+ **/
+gnutls_cipher_algorithm_t gnutls_early_cipher_get(gnutls_session_t session)
+{
+	const cipher_entry_st *ce;
+
+	if (!(session->internals.hsk_flags & HSK_EARLY_DATA_IN_FLIGHT)) {
+		return gnutls_assert_val(GNUTLS_CIPHER_UNKNOWN);
+	}
+
+	if (unlikely(session->internals.
+		     resumed_security_parameters.cs == NULL)) {
+		return gnutls_assert_val(GNUTLS_CIPHER_UNKNOWN);
+	}
+
+	ce = cipher_to_entry(session->internals.
+			     resumed_security_parameters.
+			     cs->block_algorithm);
+	if (unlikely(ce == NULL)) {
+		return gnutls_assert_val(GNUTLS_CIPHER_UNKNOWN);
+	}
+
+	return ce->id;
 }
 
 /**
@@ -229,6 +264,94 @@ gnutls_compression_get(gnutls_session_t session)
 	return GNUTLS_COMP_NULL;
 }
 
+/**
+ * gnutls_prf_hash_get:
+ * @session: is a #gnutls_session_t type.
+ *
+ * Get the currently used hash algorithm. In TLS 1.3, the hash
+ * algorithm is used for both the key derivation function and
+ * handshake message authentication code. In TLS 1.2, it matches the
+ * hash algorithm used for PRF.
+ *
+ * Returns: the currently used hash algorithm, a
+ *    #gnutls_digest_algorithm_t value.
+ *
+ * Since: 3.6.13
+ **/
+gnutls_digest_algorithm_t
+gnutls_prf_hash_get(const gnutls_session_t session)
+{
+	if (session->security_parameters.prf == NULL)
+		return gnutls_assert_val(GNUTLS_DIG_UNKNOWN);
+
+	if (session->security_parameters.prf->id >= GNUTLS_MAC_AEAD)
+		return gnutls_assert_val(GNUTLS_DIG_UNKNOWN);
+
+	return (gnutls_digest_algorithm_t)session->security_parameters.prf->id;
+}
+
+/**
+ * gnutls_early_prf_hash_get:
+ * @session: is a #gnutls_session_t type.
+ *
+ * Get the hash algorithm used as a PRF to derive keys for encrypting
+ * early data in TLS 1.3.
+ *
+ * Returns: the hash algorithm used for early data, a
+ *    #gnutls_digest_algorithm_t value.
+ *
+ * Since: 3.7.2
+ **/
+gnutls_digest_algorithm_t
+gnutls_early_prf_hash_get(const gnutls_session_t session)
+{
+	if (!(session->internals.hsk_flags & HSK_EARLY_DATA_IN_FLIGHT)) {
+		return gnutls_assert_val(GNUTLS_DIG_UNKNOWN);
+	}
+
+	if (unlikely(session->internals.
+		     resumed_security_parameters.prf == NULL)) {
+		return gnutls_assert_val(GNUTLS_DIG_UNKNOWN);
+	}
+
+	if (unlikely(session->internals.
+		     resumed_security_parameters.prf->id >= GNUTLS_MAC_AEAD)) {
+		return gnutls_assert_val(GNUTLS_DIG_UNKNOWN);
+	}
+
+	return (gnutls_digest_algorithm_t)session->internals.
+		resumed_security_parameters.prf->id;
+}
+
+/**
+ * gnutls_ciphersuite_get:
+ * @session: is a #gnutls_session_t type.
+ *
+ * Get the canonical name of negotiated TLS ciphersuite.  The names
+ * returned by this function match the IANA registry, with one
+ * exception:
+ *
+ *   TLS_DHE_DSS_RC4_128_SHA { 0x00, 0x66 }
+ *
+ * which is reserved for compatibility.
+ *
+ * To get a detailed description of the current ciphersuite, it is
+ * recommended to use gnutls_session_get_desc().
+ *
+ * Returns: a string that contains the canonical name of a TLS ciphersuite,
+ *     or %NULL if the handshake is not completed.
+ *
+ * Since: 3.7.4
+ **/
+const char *
+gnutls_ciphersuite_get(gnutls_session_t session)
+{
+	if (unlikely(session->internals.handshake_in_progress)) {
+		return NULL;
+	}
+	return session->security_parameters.cs->canonical_name;
+}
+
 void reset_binders(gnutls_session_t session)
 {
 	_gnutls_free_temp_key_datum(&session->key.binders[0].psk);
@@ -281,8 +404,8 @@ static bool _gnutls_has_cert_credentials(gnutls_session_t session,
  * and in some cases a matching certificate exists. A check for
  * the latter can be toggled via the parameter @check_credentials.
  */
-int
-_gnutls_session_cert_type_supported(gnutls_session_t session,
+bool
+_gnutls_session_is_cert_type_supported(gnutls_session_t session,
 				    gnutls_certificate_type_t cert_type,
 				    bool check_credentials,
 				    gnutls_ctype_target_t target)
@@ -389,7 +512,7 @@ static void handshake_internal_state_clear1(gnutls_session_t session)
 	session->internals.last_handshake_in = -1;
 	session->internals.last_handshake_out = -1;
 
-	session->internals.resumable = RESUME_TRUE;
+	session->internals.resumable = true;
 
 	session->internals.handshake_suspicious_loops = 0;
 	session->internals.dtls.hsk_read_seq = 0;
@@ -537,25 +660,39 @@ int gnutls_init(gnutls_session_t * session, unsigned int flags)
 			UINT32_MAX;
 	}
 
-	/* everything else not initialized here is initialized
-	 * as NULL or 0. This is why calloc is used.
+	/* Everything else not initialized here is initialized as NULL
+	 * or 0. This is why calloc is used. However, we want to
+	 * ensure that certain portions of data are initialized at
+	 * runtime before being used. Mark such regions with a
+	 * valgrind client request as undefined.
 	 */
+	_gnutls_memory_mark_undefined((*session)->security_parameters.master_secret,
+				      GNUTLS_MASTER_SIZE);
+	_gnutls_memory_mark_undefined((*session)->security_parameters.client_random,
+				      GNUTLS_RANDOM_SIZE);
+	_gnutls_memory_mark_undefined((*session)->security_parameters.server_random,
+				      GNUTLS_RANDOM_SIZE);
+	_gnutls_memory_mark_undefined((*session)->key.session_ticket_key,
+				      TICKET_MASTER_KEY_SIZE);
+	_gnutls_memory_mark_undefined((*session)->key.previous_ticket_key,
+				      TICKET_MASTER_KEY_SIZE);
+	_gnutls_memory_mark_undefined((*session)->key.initial_stek,
+				      TICKET_MASTER_KEY_SIZE);
 
 	handshake_internal_state_clear1(*session);
 
-#ifdef HAVE_WRITEV
 #ifdef MSG_NOSIGNAL
 	if (flags & GNUTLS_NO_SIGNAL)
 		gnutls_transport_set_vec_push_function(*session, system_writev_nosignal);
 	else
 #endif
 		gnutls_transport_set_vec_push_function(*session, system_writev);
-#else
-	gnutls_transport_set_push_function(*session, system_write);
-#endif
 	(*session)->internals.pull_timeout_func = gnutls_system_recv_timeout;
 	(*session)->internals.pull_func = system_read;
 	(*session)->internals.errno_func = system_errno;
+
+	(*session)->internals.saved_username = NULL;
+	(*session)->internals.saved_username_size = -1;
 
 	/* heartbeat timeouts */
 	(*session)->internals.hb_retrans_timeout_ms = 1000;
@@ -587,14 +724,10 @@ int gnutls_init(gnutls_session_t * session, unsigned int flags)
 	if (_gnutls_disable_tls13 != 0)
 		(*session)->internals.flags |= INT_FLAG_NO_TLS13;
 
-	return 0;
-}
+	/* Install the default keylog function */
+	gnutls_session_set_keylog_function(*session, _gnutls_nss_keylog_func);
 
-/* returns RESUME_FALSE or RESUME_TRUE.
- */
-int _gnutls_session_is_resumable(gnutls_session_t session)
-{
-	return session->internals.resumable;
+	return 0;
 }
 
 
@@ -645,22 +778,47 @@ void gnutls_deinit(gnutls_session_t session)
 	_gnutls_free_datum(&session->internals.resumption_data);
 	_gnutls_free_datum(&session->internals.dtls.dcookie);
 
+	for (i = 0; i < session->internals.rexts_size; i++)
+		gnutls_free(session->internals.rexts[i].name);
 	gnutls_free(session->internals.rexts);
 	gnutls_free(session->internals.post_handshake_cr_context.data);
 
+	gnutls_free(session->internals.saved_username);
 	gnutls_free(session->internals.rsup);
 
 	gnutls_credentials_clear(session);
 	_gnutls_selected_certs_deinit(session);
 
 	/* destroy any session ticket we may have received */
-	_gnutls13_session_ticket_unset(session);
+	tls13_ticket_deinit(&session->internals.tls13_ticket);
 
 	/* we rely on priorities' internal reference counting */
 	gnutls_priority_deinit(session->internals.priorities);
 
 	/* overwrite any temp TLS1.3 keys */
 	gnutls_memset(&session->key.proto, 0, sizeof(session->key.proto));
+
+	/* clear session ticket keys */
+	_gnutls_memory_mark_defined(session->key.session_ticket_key,
+				    TICKET_MASTER_KEY_SIZE);
+	gnutls_memset(&session->key.session_ticket_key, 0,
+	              TICKET_MASTER_KEY_SIZE);
+	_gnutls_memory_mark_undefined(session->key.session_ticket_key,
+				      TICKET_MASTER_KEY_SIZE);
+
+	_gnutls_memory_mark_defined(session->key.previous_ticket_key,
+				    TICKET_MASTER_KEY_SIZE);
+	gnutls_memset(&session->key.previous_ticket_key, 0,
+	              TICKET_MASTER_KEY_SIZE);
+	_gnutls_memory_mark_undefined(session->key.previous_ticket_key,
+				      TICKET_MASTER_KEY_SIZE);
+
+	_gnutls_memory_mark_defined(session->key.initial_stek,
+				    TICKET_MASTER_KEY_SIZE);
+	gnutls_memset(&session->key.initial_stek, 0,
+	              TICKET_MASTER_KEY_SIZE);
+	_gnutls_memory_mark_undefined(session->key.initial_stek,
+				      TICKET_MASTER_KEY_SIZE);
 
 	gnutls_mutex_deinit(&session->internals.post_negotiation_lock);
 	gnutls_mutex_deinit(&session->internals.epoch_lock);
@@ -928,9 +1086,9 @@ int gnutls_session_is_resumed(gnutls_session_t session)
 {
 	if (session->security_parameters.entity == GNUTLS_CLIENT) {
 		const version_entry_st *ver = get_version(session);
-		if (ver && ver->tls13_sem &&
-		    session->internals.resumed != RESUME_FALSE)
-			return 1;
+		if (ver && ver->tls13_sem) {
+			return session->internals.resumed;
+		}
 
 		if (session->security_parameters.session_id_size > 0 &&
 		    session->security_parameters.session_id_size ==
@@ -944,7 +1102,7 @@ int gnutls_session_is_resumed(gnutls_session_t session)
 			      session_id_size) == 0)
 			return 1;
 	} else {
-		if (session->internals.resumed != RESUME_FALSE)
+		if (session->internals.resumed)
 			return 1;
 	}
 
@@ -1205,20 +1363,131 @@ gnutls_session_channel_binding(gnutls_session_t session,
 			       gnutls_channel_binding_t cbtype,
 			       gnutls_datum_t * cb)
 {
-	if (cbtype != GNUTLS_CB_TLS_UNIQUE)
-		return GNUTLS_E_UNIMPLEMENTED_FEATURE;
-
 	if (!session->internals.initial_negotiation_completed)
 		return GNUTLS_E_CHANNEL_BINDING_NOT_AVAILABLE;
 
-	cb->size = session->internals.cb_tls_unique_len;
-	cb->data = gnutls_malloc(cb->size);
-	if (cb->data == NULL)
-		return GNUTLS_E_MEMORY_ERROR;
+	if (cbtype == GNUTLS_CB_TLS_UNIQUE) {
+		const version_entry_st *ver = get_version(session);
+		if (unlikely(ver == NULL || ver->tls13_sem))
+			return GNUTLS_E_CHANNEL_BINDING_NOT_AVAILABLE;
 
-	memcpy(cb->data, session->internals.cb_tls_unique, cb->size);
+		cb->size = session->internals.cb_tls_unique_len;
+		cb->data = gnutls_malloc(cb->size);
+		if (cb->data == NULL)
+			return GNUTLS_E_MEMORY_ERROR;
 
-	return 0;
+		memcpy(cb->data, session->internals.cb_tls_unique, cb->size);
+
+		return 0;
+	}
+
+	if (cbtype == GNUTLS_CB_TLS_SERVER_END_POINT) {
+		const gnutls_datum_t *ders;
+		unsigned int num_certs = 1;
+		int ret;
+		size_t rlen;
+		gnutls_x509_crt_t cert;
+		gnutls_digest_algorithm_t algo;
+
+		/* Only X509 certificates are supported for this binding type */
+		ret = gnutls_certificate_type_get (session);
+		if (ret != GNUTLS_CRT_X509)
+			return GNUTLS_E_UNIMPLEMENTED_FEATURE;
+
+		if (session->security_parameters.entity == GNUTLS_CLIENT)
+			ders = gnutls_certificate_get_peers (session, &num_certs);
+		else
+			ders = gnutls_certificate_get_ours (session);
+
+		/* Previous check indicated we have x509 but you never know */
+		if (!ders || num_certs == 0)
+			return GNUTLS_E_UNIMPLEMENTED_FEATURE;
+
+		ret = gnutls_x509_crt_list_import (&cert, &num_certs, ders,
+				GNUTLS_X509_FMT_DER, 0);
+		/* Again, this is not supposed to happen (normally) */
+		if (ret < 0 || num_certs == 0)
+			return GNUTLS_E_CHANNEL_BINDING_NOT_AVAILABLE;
+
+		/* Obtain signature algorithm used by certificate */
+		ret = gnutls_x509_crt_get_signature_algorithm (cert);
+		if (ret < 0 || ret == GNUTLS_SIGN_UNKNOWN)
+			return GNUTLS_E_UNIMPLEMENTED_FEATURE;
+
+		/* obtain hash function from signature and normalize it */
+		algo = gnutls_sign_get_hash_algorithm (ret);
+		switch (algo) {
+		case GNUTLS_DIG_MD5:
+		case GNUTLS_DIG_SHA1:
+			algo = GNUTLS_DIG_SHA256;
+			break;
+		case GNUTLS_DIG_UNKNOWN:
+		case GNUTLS_DIG_NULL:
+		case GNUTLS_DIG_MD5_SHA1:
+			/* double hashing not supported either */
+			gnutls_x509_crt_deinit (cert);
+			return GNUTLS_E_UNIMPLEMENTED_FEATURE;
+		default:
+			break;
+		}
+
+		/* preallocate 512 bits buffer as maximum supported digest */
+		rlen = MAX_HASH_SIZE;
+		cb->data = gnutls_malloc(rlen);
+		if (cb->data == NULL) {
+			gnutls_x509_crt_deinit (cert);
+			return GNUTLS_E_MEMORY_ERROR;
+		}
+
+		ret = gnutls_x509_crt_get_fingerprint (cert, algo, cb->data,
+				&rlen);
+		if (ret == GNUTLS_E_SHORT_MEMORY_BUFFER) {
+			cb->data = gnutls_realloc_fast (cb->data, cb->size);
+			if (cb->data == NULL) {
+				gnutls_x509_crt_deinit (cert);
+				return GNUTLS_E_MEMORY_ERROR;
+			}
+			ret = gnutls_x509_crt_get_fingerprint (cert, algo,
+					cb->data, &rlen);
+		}
+		cb->size = rlen;
+		gnutls_x509_crt_deinit (cert);
+		return ret;
+	}
+
+	if (cbtype == GNUTLS_CB_TLS_EXPORTER) {
+#define RFC5705_LABEL_DATA "EXPORTER-Channel-Binding"
+#define RFC5705_LABEL_LEN 24
+#define EXPORTER_CTX_DATA ""
+#define EXPORTER_CTX_LEN 0
+
+		const version_entry_st *ver = get_version(session);
+		if (unlikely(ver == NULL)) {
+			return GNUTLS_E_CHANNEL_BINDING_NOT_AVAILABLE;
+		}
+
+		/* "tls-exporter" channel binding is defined only when
+		 * the TLS handshake results in unique master secrets,
+		 * i.e., either TLS 1.3, or TLS 1.2 with extended
+		 * master secret negotiated.
+		 */
+		if (!ver->tls13_sem &&
+		    gnutls_session_ext_master_secret_status(session) == 0) {
+			return GNUTLS_E_CHANNEL_BINDING_NOT_AVAILABLE;
+		}
+
+		cb->size = 32;
+		cb->data = gnutls_malloc(cb->size);
+		if (cb->data == NULL)
+			return GNUTLS_E_MEMORY_ERROR;
+
+		return gnutls_prf_rfc5705 (session,
+				RFC5705_LABEL_LEN, RFC5705_LABEL_DATA,
+				EXPORTER_CTX_LEN, EXPORTER_CTX_DATA,
+				cb->size, (char *) cb->data);
+	}
+
+	return GNUTLS_E_UNIMPLEMENTED_FEATURE;
 }
 
 /**
@@ -1411,6 +1680,40 @@ gnutls_handshake_set_hook_function(gnutls_session_t session,
 	session->internals.h_hook = func;
 	session->internals.h_type = htype;
 	session->internals.h_post = when;
+}
+
+/**
+ * gnutls_handshake_set_read_function:
+ * @session: is #gnutls_session_t type
+ * @func: is the function to be called
+ *
+ * This function will set a callback to be called when a handshake
+ * message is being sent.
+ *
+ * Since: 3.7.0
+ */
+void
+gnutls_handshake_set_read_function(gnutls_session_t session,
+				   gnutls_handshake_read_func func)
+{
+	session->internals.h_read_func = func;
+}
+
+/**
+ * gnutls_alert_set_read_function:
+ * @session: is #gnutls_session_t type
+ * @func: is the function to be called
+ *
+ * This function will set a callback to be called when an alert
+ * message is being sent.
+ *
+ * Since: 3.7.0
+ */
+void
+gnutls_alert_set_read_function(gnutls_session_t session,
+			       gnutls_alert_read_func func)
+{
+	session->internals.alert_read_func = func;
 }
 
 /**

@@ -53,7 +53,7 @@ typedef int ssize_t;
 #endif
 #include <time.h>
 
-#include <nettle/memxor.h>
+#include "attribute.h"
 
 #define ENABLE_ALIGN16
 
@@ -74,26 +74,6 @@ typedef int ssize_t;
 #else
 # define likely
 # define unlikely
-#endif
-
-#if _GNUTLS_GCC_VERSION >= 30300
-# define attr_nonnull_all __attribute__ ((nonnull))
-# define attr_nonnull(a)  __attribute__ ((nonnull a))
-#else
-# define attr_nonnull_all
-# define attr_nonnull(a)
-#endif
-
-#if _GNUTLS_GCC_VERSION >= 30400 && (_GNUTLS_CLANG_VERSION == 0 || _GNUTLS_CLANG_VERSION >= 40000)
-# define attr_warn_unused_result __attribute__((warn_unused_result))
-#else
-# define attr_warn_unused_result
-#endif
-
-#if _GNUTLS_GCC_VERSION >= 70100
-# define FALLTHROUGH __attribute__ ((fallthrough))
-#else
-# define FALLTHROUGH
 #endif
 
 #include <gnutls/gnutls.h>
@@ -128,7 +108,10 @@ typedef int ssize_t;
 
 #define MAX_CIPHER_IV_SIZE 16
 
-#define MAX_USERNAME_SIZE 128
+/* Maximum size of 2^16-1 has been chosen so that usernames can hold
+ * PSK identities as defined in RFC 4279 section 2 and RFC 8446 section 4.2.11
+ */
+#define MAX_USERNAME_SIZE 65535
 #define MAX_SERVER_NAME_SIZE 256
 
 #define AEAD_EXPLICIT_DATA_SIZE 8
@@ -146,7 +129,7 @@ typedef int ssize_t;
 /* TLS Extensions */
 /* we can receive up to MAX_EXT_TYPES extensions.
  */
-#define MAX_EXT_TYPES 32
+#define MAX_EXT_TYPES 64
 
 /* TLS-internal extension (will be parsed after a ciphersuite is selected).
  * This amends the gnutls_ext_parse_type_t. Not exported yet to allow more refining
@@ -194,6 +177,9 @@ typedef enum record_send_state_t {
 
 /* To check whether we have a DTLS session */
 #define IS_DTLS(session) (session->internals.transport == GNUTLS_DGRAM)
+
+/* To check whether we have a KTLS enabled */
+#define IS_KTLS_ENABLED(session, interface) (session->internals.ktls_enabled & interface)
 
 /* the maximum size of encrypted packets */
 #define DEFAULT_MAX_RECORD_SIZE 16384
@@ -350,6 +336,7 @@ typedef enum extensions_t {
 	GNUTLS_EXTENSION_PSK_KE_MODES,
 	GNUTLS_EXTENSION_RECORD_SIZE_LIMIT,
 	GNUTLS_EXTENSION_MAX_RECORD_SIZE,
+	GNUTLS_EXTENSION_COMPRESS_CERTIFICATE,
 	/*
 	 * pre_shared_key and dumbfw must always be the last extensions,
 	 * in that order */
@@ -358,27 +345,26 @@ typedef enum extensions_t {
 	GNUTLS_EXTENSION_MAX /* not real extension - used for iterators */
 } extensions_t;
 
-#define GNUTLS_EXTENSION_MAX_VALUE 31
-#define ext_track_t uint32_t
+#define GNUTLS_EXTENSION_MAX_VALUE 63
+#define ext_track_t uint64_t
 
-#if GNUTLS_EXTENSION_MAX >= GNUTLS_EXTENSION_MAX_VALUE
-# error over limit
-#endif
+#include <verify.h>
 
-#if GNUTLS_EXTENSION_MAX >= MAX_EXT_TYPES
-# error over limit
-#endif
+verify(GNUTLS_EXTENSION_MAX < GNUTLS_EXTENSION_MAX_VALUE);
+verify(GNUTLS_EXTENSION_MAX < MAX_EXT_TYPES);
 
-/* we must provide at least 16 extensions for users to register */
-#if GNUTLS_EXTENSION_MAX_VALUE - GNUTLS_EXTENSION_MAX < 16
-# error not enough extension types; increase GNUTLS_EXTENSION_MAX_VALUE, MAX_EXT_TYPES and used_exts type
-#endif
+/* we must provide at least 16 extensions for users to register;
+ * increase GNUTLS_EXTENSION_MAX_VALUE, MAX_EXT_TYPES and used_exts
+ * type if this fails
+ */
+verify(GNUTLS_EXTENSION_MAX_VALUE - GNUTLS_EXTENSION_MAX >= 16);
 
+/* The 'verify' symbol from <verify.h> is used extensively in the
+ * code; undef it to avoid clash
+ */
+#undef verify
 
 typedef enum { CIPHER_STREAM, CIPHER_BLOCK, CIPHER_AEAD } cipher_type_t;
-
-#define RESUME_TRUE 1
-#define RESUME_FALSE 0
 
 /* Record Protocol */
 typedef enum content_type_t {
@@ -549,7 +535,7 @@ struct gnutls_key_st {
 			uint8_t ap_rms[MAX_HASH_SIZE]; /* resumption_master_secret */
 		} tls13; /* tls1.3 */
 
-		/* Folow the SSL3.0 and TLS1.2 key exchanges */
+		/* Follow the SSL3.0 and TLS1.2 key exchanges */
 		struct {
 			/* For ECDH KX */
 			struct {
@@ -601,6 +587,10 @@ struct gnutls_key_st {
 		/* Initial key supplied by the caller */
 		initial_stek[TICKET_MASTER_KEY_SIZE];
 
+	/* Whether the initial_stek is set through
+	 * gnutls_session_ticket_enable_server() */
+	bool stek_initialized;
+
 	/* this is used to hold the peers authentication data
 	 */
 	/* auth_info_t structures SHOULD NOT contain malloced
@@ -636,6 +626,7 @@ typedef struct record_parameters_st record_parameters_st;
 #define GNUTLS_CIPHER_FLAG_ONLY_AEAD	(1 << 0) /* When set, this cipher is only available through the new AEAD API */
 #define GNUTLS_CIPHER_FLAG_XOR_NONCE	(1 << 1) /* In this TLS AEAD cipher xor the implicit_iv with the nonce */
 #define GNUTLS_CIPHER_FLAG_NO_REKEY	(1 << 2) /* whether this tls1.3 cipher doesn't need to rekey after 2^24 messages */
+#define GNUTLS_CIPHER_FLAG_TAG_PREFIXED (1 << 3) /* When set, this cipher prefixes authentication tag */
 
 /* cipher and mac parameters */
 typedef struct cipher_entry_st {
@@ -654,6 +645,7 @@ typedef struct cipher_entry_st {
 typedef struct gnutls_cipher_suite_entry_st {
 	const char *name;
 	const uint8_t id[2];
+	const char *canonical_name;
 	gnutls_cipher_algorithm_t block_algorithm;
 	gnutls_kx_algorithm_t kx_algorithm;
 	gnutls_mac_algorithm_t mac_algorithm;
@@ -683,6 +675,8 @@ typedef struct gnutls_group_entry_st {
 
 #define GNUTLS_MAC_FLAG_PREIMAGE_INSECURE	1  /* if this algorithm should not be trusted for pre-image attacks */
 #define GNUTLS_MAC_FLAG_CONTINUOUS_MAC		(1 << 1) /* if this MAC should be used in a 'continuous' way in TLS */
+#define GNUTLS_MAC_FLAG_PREIMAGE_INSECURE_REVERTIBLE	(1 << 2)  /* if this algorithm should not be trusted for pre-image attacks, but can be enabled through API */
+#define GNUTLS_MAC_FLAG_ALLOW_INSECURE_REVERTIBLE	(1 << 3)  /* when checking with _gnutls_digest_is_insecure2, don't treat revertible setting as fatal */
 /* This structure is used both for MACs and digests
  */
 typedef struct mac_entry_st {
@@ -706,6 +700,7 @@ typedef struct {
 	uint8_t minor;		/* defined by the protocol */
 	transport_t transport;	/* Type of transport, stream or datagram */
 	bool supported;	/* 0 not supported, > 0 is supported */
+	bool supported_revertible;
 	bool explicit_iv;
 	bool extensions;	/* whether it supports extensions */
 	bool selectable_sighash;	/* whether signatures can be selected */
@@ -867,6 +862,7 @@ struct record_state_st {
 	unsigned aead_tag_size;
 	unsigned is_aead;
 	uint64_t sequence_number;
+	gnutls_record_encryption_level_t level;
 };
 
 
@@ -966,10 +962,12 @@ struct gnutls_priority_st {
 	bool server_precedence;
 	bool allow_server_key_usage_violation; /* for test suite purposes only */
 	bool no_tickets;
+	bool no_tickets_tls12;
 	bool have_cbc;
 	bool have_psk;
 	bool force_etm;
 	unsigned int additional_verify_flags;
+	bool tls13_compat_mode;
 
 	/* TLS_FALLBACK_SCSV */
 	bool fallback;
@@ -1101,7 +1099,7 @@ typedef struct {
 	gnutls_buffer_st handshake_hash_buffer;	/* used to keep the last received handshake
 						 * message */
 
-	bool resumable;	/* TRUE or FALSE - if we can resume that session */
+	bool resumable;	/* if we can resume that session */
 
 	send_ticket_state_t ticket_state; /* used by gnutls_session_ticket_send() */
 	bye_state_t bye_state; /* used by gnutls_bye() */
@@ -1115,7 +1113,7 @@ typedef struct {
 						 * no interruption has happened.
 						 */
 
-	bool invalid_connection;	/* true or FALSE - if this session is valid */
+	bool invalid_connection;	/* if this session is valid */
 
 	bool may_not_read;	/* if it's 0 then we can read/write, otherwise it's forbidden to read/write
 				 */
@@ -1150,7 +1148,7 @@ typedef struct {
 	uint16_t dh_prime_bits; /* srp_prime_bits */
 
 	/* resumed session */
-	bool resumed;	/* RESUME_TRUE or FALSE - if we are resuming a session */
+	bool resumed;	/* if we are resuming a session */
 
 	/* server side: non-zero if resumption was requested by client
 	 * client side: non-zero if we set resumption parameters */
@@ -1212,6 +1210,11 @@ typedef struct {
 	 */
 	gnutls_certificate_request_t send_cert_req;
 
+	/* callback to print the full path of certificate
+	 * validation to the trusted root.
+	 */
+	gnutls_verify_output_function *cert_output_callback;
+
 	size_t max_handshake_data_buffer_size;
 
 	/* PUSH & PULL functions.
@@ -1242,6 +1245,11 @@ typedef struct {
 	gnutls_handshake_hook_func h_hook;
 	unsigned int h_type;	/* the hooked type */
 	int16_t h_post;		/* whether post-generation/receive */
+	gnutls_handshake_read_func h_read_func;
+	gnutls_handshake_secret_func h_secret_func;
+	gnutls_alert_read_func alert_read_func;
+
+	gnutls_keylog_func keylog_func;
 
 	/* holds the selected certificate and key.
 	 * use _gnutls_selected_certs_deinit() and _gnutls_selected_certs_set()
@@ -1384,6 +1392,7 @@ typedef struct {
 #define HSK_RECORD_SIZE_LIMIT_RECEIVED (1<<26) /* server: record_size_limit extension was seen but not accepted yet */
 #define HSK_OCSP_REQUESTED (1<<27) /* server: client requested OCSP stapling */
 #define HSK_CLIENT_OCSP_REQUESTED (1<<28) /* client: server requested OCSP stapling */
+#define HSK_SERVER_HELLO_RECEIVED (1<<29) /* client: Server Hello message has been received */
 
 	/* The hsk_flags are for use within the ongoing handshake;
 	 * they are reset to zero prior to handshake start by gnutls_handshake. */
@@ -1440,8 +1449,11 @@ typedef struct {
 	bool cert_hash_set;
 
 	/* The saved username from PSK or SRP auth */
-	char saved_username[MAX_USERNAME_SIZE+1];
-	bool saved_username_set;
+	char *saved_username;
+	/* Length of the saved username without the NULL terminating byte.
+	 * Must be set to -1 when saved username is NULL
+	 */
+	int saved_username_size;
 
 	/* Needed for TCP Fast Open (TFO), set by gnutls_transport_set_fastopen() */
 	tfo_st tfo;
@@ -1495,6 +1507,12 @@ typedef struct {
 	/* Protects _gnutls_epoch_gc() from _gnutls_epoch_get(); these may be
 	 * called in parallel when false start is used and false start is used. */
 	void *epoch_lock;
+
+	/* indicates whether or not was KTLS initialized properly. */
+	int ktls_enabled;
+
+	/* Compression method for certificate compression */
+	gnutls_compression_method_t compress_certificate_method;
 
 	/* If you add anything here, check _gnutls_handshake_internal_state_clear().
 	 */
@@ -1636,5 +1654,7 @@ get_certificate_type(gnutls_session_t session,
 #define CONSTCHECK_EQUAL(a, b) (1U - CONSTCHECK_NOT_EQUAL(a, b))
 
 extern unsigned int _gnutls_global_version;
+
+bool _gnutls_config_is_ktls_enabled(void);
 
 #endif /* GNUTLS_LIB_GNUTLS_INT_H */

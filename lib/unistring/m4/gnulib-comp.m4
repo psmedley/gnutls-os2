@@ -1,5 +1,5 @@
 # DO NOT EDIT! GENERATED AUTOMATICALLY!
-# Copyright (C) 2002-2019 Free Software Foundation, Inc.
+# Copyright (C) 2002-2021 Free Software Foundation, Inc.
 #
 # This file is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -44,6 +44,7 @@ AC_DEFUN([unistring_EARLY],
   AC_REQUIRE([AM_PROG_CC_C_O])
   # Code from module absolute-header:
   # Code from module array-mergesort:
+  # Code from module attribute:
   # Code from module gperf:
   # Code from module include_next:
   # Code from module inline:
@@ -154,6 +155,8 @@ AC_DEFUN([unistring_INIT],
   m4_pushdef([AC_LIBSOURCES], m4_defn([unistring_LIBSOURCES]))
   m4_pushdef([unistring_LIBSOURCES_LIST], [])
   m4_pushdef([unistring_LIBSOURCES_DIR], [])
+  m4_pushdef([GL_MACRO_PREFIX], [unistring])
+  m4_pushdef([GL_MODULE_INDICATOR_PREFIX], [GL_UNISTRING])
   gl_COMMON
   gl_source_base='lib/unistring'
   gl_INLINE
@@ -163,8 +166,9 @@ AC_DEFUN([unistring_INIT],
   AM_STDBOOL_H
   gl_STDINT_H
   gl_SYS_TYPES_H
+  gl_SYS_TYPES_H_REQUIRE_DEFAULTS
   AC_PROG_MKDIR_P
-  gl_LIBUNISTRING_LIBHEADER([0.9.4], [unictype.h])
+  gl_LIBUNISTRING_LIBHEADER([0.9.8], [unictype.h])
   gl_LIBUNISTRING_MODULE([0.9.8], [unictype/category-C])
   gl_LIBUNISTRING_MODULE([0.9.8], [unictype/category-Cc])
   gl_LIBUNISTRING_MODULE([0.9.8], [unictype/category-Cf])
@@ -221,7 +225,7 @@ AC_DEFUN([unistring_INIT],
   gl_LIBUNISTRING_MODULE([0.9.8], [unictype/property-join-control])
   AC_REQUIRE([AC_C_INLINE])
   gl_LIBUNISTRING_MODULE([0.9.8], [unictype/property-not-a-character])
-  gl_LIBUNISTRING_LIBHEADER([0.9.4], [uninorm.h])
+  gl_LIBUNISTRING_LIBHEADER([0.9.11], [uninorm.h])
   gl_LIBUNISTRING_MODULE([0.9.8], [uninorm/canonical-decomposition])
   gl_LIBUNISTRING_MODULE([0.9.8], [uninorm/composition])
   gl_LIBUNISTRING_MODULE([0.9.8], [uninorm/decomposition])
@@ -236,7 +240,7 @@ AC_DEFUN([unistring_INIT],
   gl_LIBUNISTRING_MODULE([0.9.8], [uninorm/u32-normalize])
   gl_MODULE_INDICATOR_FOR_TESTS([uninorm/u8-normalize])
   gl_LIBUNISTRING_MODULE([0.9.8], [uninorm/u8-normalize])
-  gl_LIBUNISTRING_LIBHEADER([0.9.4], [unistr.h])
+  gl_LIBUNISTRING_LIBHEADER([0.9.11], [unistr.h])
   gl_LIBUNISTRING_MODULE([0.9], [unistr/u16-cpy])
   gl_MODULE_INDICATOR([unistr/u16-mbtouc-unsafe])
   gl_LIBUNISTRING_MODULE([0.9], [unistr/u16-mbtouc-unsafe])
@@ -261,7 +265,7 @@ AC_DEFUN([unistring_INIT],
   gl_LIBUNISTRING_MODULE([0.9.3], [unistr/u8-to-u32])
   gl_MODULE_INDICATOR([unistr/u8-uctomb])
   gl_LIBUNISTRING_MODULE([0.9], [unistr/u8-uctomb])
-  gl_LIBUNISTRING_LIBHEADER([0.9.4], [unitypes.h])
+  gl_LIBUNISTRING_LIBHEADER([0.9.11], [unitypes.h])
   # End of code from modules
   m4_ifval(unistring_LIBSOURCES_LIST, [
     m4_syscmd([test ! -d ]m4_defn([unistring_LIBSOURCES_DIR])[ ||
@@ -274,6 +278,8 @@ AC_DEFUN([unistring_INIT],
       m4_if(m4_sysval, [0], [],
         [AC_FATAL([expected source file, required through AC_LIBSOURCES, not found])])
   ])
+  m4_popdef([GL_MODULE_INDICATOR_PREFIX])
+  m4_popdef([GL_MACRO_PREFIX])
   m4_popdef([unistring_LIBSOURCES_DIR])
   m4_popdef([unistring_LIBSOURCES_LIST])
   m4_popdef([AC_LIBSOURCES])
@@ -300,6 +306,8 @@ AC_DEFUN([unistring_INIT],
   m4_pushdef([AC_LIBSOURCES], m4_defn([unistringtests_LIBSOURCES]))
   m4_pushdef([unistringtests_LIBSOURCES_LIST], [])
   m4_pushdef([unistringtests_LIBSOURCES_DIR], [])
+  m4_pushdef([GL_MACRO_PREFIX], [unistringtests])
+  m4_pushdef([GL_MODULE_INDICATOR_PREFIX], [GL_UNISTRING])
   gl_COMMON
   gl_source_base='tests'
 changequote(,)dnl
@@ -320,6 +328,8 @@ changequote([, ])dnl
       m4_if(m4_sysval, [0], [],
         [AC_FATAL([expected source file, required through AC_LIBSOURCES, not found])])
   ])
+  m4_popdef([GL_MODULE_INDICATOR_PREFIX])
+  m4_popdef([GL_MACRO_PREFIX])
   m4_popdef([unistringtests_LIBSOURCES_DIR])
   m4_popdef([unistringtests_LIBSOURCES_LIST])
   m4_popdef([AC_LIBSOURCES])
@@ -399,6 +409,7 @@ AC_DEFUN([unistringtests_LIBSOURCES], [
 # gnulib-tool and may be removed by future gnulib-tool invocations.
 AC_DEFUN([unistring_FILE_LIST], [
   lib/array-mergesort.h
+  lib/attribute.h
   lib/limits.in.h
   lib/stdbool.in.h
   lib/stdint.in.h
@@ -552,12 +563,13 @@ AC_DEFUN([unistring_FILE_LIST], [
   m4/inline.m4
   m4/libunistring-base.m4
   m4/limits-h.m4
-  m4/longlong.m4
   m4/multiarch.m4
   m4/off_t.m4
+  m4/pid_t.m4
   m4/ssize_t.m4
   m4/stdbool.m4
   m4/stdint.m4
   m4/sys_types_h.m4
   m4/wint_t.m4
+  m4/zzgnulib.m4
 ])

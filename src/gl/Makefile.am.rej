@@ -1,0 +1,82 @@
+--- src/gl/Makefile.am	2019-05-27 05:11:40.000000000 +0930
++++ src/gl/Makefile.am	2023-02-10 00:34:01.000000000 +1030
+@@ -258,12 +320,79 @@
+ 
+ ## end   gnulib module bind
+ 
++## begin gnulib module bison
++
++# See the comments in bison.m4.
++
++## end   gnulib module bison
++
++## begin gnulib module bitrotate
++
++libgnu_gpl_la_SOURCES += bitrotate.h bitrotate.c
++
++## end   gnulib module bitrotate
++
++## begin gnulib module byteswap
++
++BUILT_SOURCES += $(BYTESWAP_H)
++
++# We need the following in order to create <byteswap.h> when the system
++# doesn't have one.
++if GL_GENERATE_BYTESWAP_H
++byteswap.h: byteswap.in.h $(top_builddir)/config.status
++	$(AM_V_GEN)rm -f $@-t $@ && \
++	{ echo '/* DO NOT EDIT! GENERATED AUTOMATICALLY! */'; \
++	  cat $(srcdir)/byteswap.in.h; \
++	} > $@-t && \
++	mv -f $@-t $@
++else
++byteswap.h: $(top_builddir)/config.status
++	rm -f $@
++endif
++MOSTLYCLEANFILES += byteswap.h byteswap.h-t
++
++EXTRA_DIST += byteswap.in.h
++
++## end   gnulib module byteswap
++
+ ## begin gnulib module c-ctype
+ 
+ libgnu_gpl_la_SOURCES += c-ctype.h c-ctype.c
+ 
+ ## end   gnulib module c-ctype
+ 
++## begin gnulib module c-strcase
++
++libgnu_gpl_la_SOURCES += c-strcase.h c-strcasecmp.c c-strncasecmp.c
++
++## end   gnulib module c-strcase
++
++## begin gnulib module calloc-gnu
++
++
++EXTRA_DIST += calloc.c
++
++EXTRA_libgnu_gpl_la_SOURCES += calloc.c
++
++## end   gnulib module calloc-gnu
++
++## begin gnulib module calloc-posix
++
++
++EXTRA_DIST += calloc.c
++
++EXTRA_libgnu_gpl_la_SOURCES += calloc.c
++
++## end   gnulib module calloc-posix
++
++## begin gnulib module cloexec
++
++libgnu_gpl_la_SOURCES += cloexec.c
++
++EXTRA_DIST += cloexec.h
++
++## end   gnulib module cloexec
++
+ ## begin gnulib module close
+ 
+ 

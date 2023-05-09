@@ -120,17 +120,17 @@ int gnutls_pcert_import_x509_list(gnutls_pcert_st * pcert_list,
 
 	if (flags & GNUTLS_X509_CRT_LIST_SORT && *ncrt > 1) {
 		if (*ncrt > DEFAULT_MAX_VERIFY_DEPTH) {
-			ret = _gnutls_check_if_sorted(crt, *ncrt);
+			ret = _gnutls_check_if_sorted(s, *ncrt);
 			if (ret < 0) {
 				gnutls_assert();
 				return GNUTLS_E_CERTIFICATE_LIST_UNSORTED;
 			}
 		} else {
-			s = _gnutls_sort_clist(sorted, crt, ncrt, NULL);
-			if (s == crt) {
-				gnutls_assert();
-				return GNUTLS_E_UNIMPLEMENTED_FEATURE;
+			for (i = 0; i < *ncrt; i++) {
+				sorted[i] = s[i];
 			}
+			s = sorted;
+			*ncrt = _gnutls_sort_clist(s, *ncrt);
 		}
 	}
 
@@ -185,7 +185,8 @@ gnutls_pcert_list_import_x509_raw(gnutls_pcert_st *pcert_list,
 	unsigned int i = 0, j;
 	gnutls_x509_crt_t *crt;
 
-	crt = gnutls_malloc((*pcert_list_size) * sizeof(gnutls_x509_crt_t));
+	crt = _gnutls_reallocarray(NULL, *pcert_list_size,
+				   sizeof(gnutls_x509_crt_t));
 
 	if (crt == NULL)
 		return gnutls_assert_val(GNUTLS_E_MEMORY_ERROR);

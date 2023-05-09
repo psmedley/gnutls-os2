@@ -66,6 +66,14 @@ since @code{gnutls_record_recv()}  could be interrupted when sending when this f
 Note this flag may not be used if you are using the same session for sending and receiving
 in different threads.
 @item GNUTLS_@-ENABLE_@-EARLY_@-DATA
-Under TLS1.3 allow the server to receive early data sent as part of the initial ClientHello (0-RTT). 
+Under TLS1.3 allow the server to receive early data sent as part of the initial ClientHello (0-RTT).
+This can also be used to explicitly indicate that the client will send early data.
 This is not enabled by default as early data has weaker security properties than other data. Since 3.6.5.
+@item GNUTLS_@-NO_@-AUTO_@-SEND_@-TICKET
+Under TLS1.3 disable auto-sending of
+session tickets during the handshake.
+@item GNUTLS_@-NO_@-END_@-OF_@-EARLY_@-DATA
+Under TLS1.3 suppress sending EndOfEarlyData message. Since 3.7.2.
+@item GNUTLS_@-NO_@-TICKETS_@-TLS12
+Flag to indicate that the session should not use resumption with session tickets. This flag only has effect if TLS 1.2 is used.
 @end table

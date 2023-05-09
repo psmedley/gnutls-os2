@@ -37,21 +37,18 @@
 #include "x509_int.h"
 #include "pkcs7_int.h"
 #include <random.h>
-#include <nettle/pbkdf2.h>
-#if ENABLE_GOST
-#include "../nettle/gost/pbkdf2-gost.h"
-#endif
+#include "intprops.h"
 
 
 /* Decodes the PKCS #12 auth_safe, and returns the allocated raw data,
- * which holds them. Returns an ASN1_TYPE of authenticatedSafe.
+ * which holds them. Returns an asn1_node of authenticatedSafe.
  */
 static int
-_decode_pkcs12_auth_safe(ASN1_TYPE pkcs12, ASN1_TYPE * authen_safe,
+_decode_pkcs12_auth_safe(asn1_node pkcs12, asn1_node * authen_safe,
 			 gnutls_datum_t * raw)
 {
 	char oid[MAX_OID_SIZE];
-	ASN1_TYPE c2 = ASN1_TYPE_EMPTY;
+	asn1_node c2 = NULL;
 	gnutls_datum_t auth_safe = { NULL, 0 };
 	int len, result;
 	char error_str[ASN1_MAX_ERROR_DESCRIPTION_SIZE];
@@ -289,13 +286,26 @@ gnutls_pkcs12_export(gnutls_pkcs12_t pkcs12,
 		     gnutls_x509_crt_fmt_t format, void *output_data,
 		     size_t * output_data_size)
 {
+	int ret;
+
 	if (pkcs12 == NULL) {
 		gnutls_assert();
 		return GNUTLS_E_INVALID_REQUEST;
 	}
 
-	return _gnutls_x509_export_int(pkcs12->pkcs12, format, PEM_PKCS12,
-				       output_data, output_data_size);
+	ret = _gnutls_x509_export_int(pkcs12->pkcs12, format, PEM_PKCS12,
+				      output_data, output_data_size);
+
+	if (ret < 0) {
+		_gnutls_switch_fips_state(GNUTLS_FIPS140_OP_ERROR);
+	} else {
+		/* PKCS#12 export is always non-approved, because the MAC
+		 * calculation involves non-approved KDF (PKCS#12 KDF) and
+		 * without MAC the protection is insufficient.
+		 */
+		_gnutls_switch_fips_state(GNUTLS_FIPS140_OP_NOT_APPROVED);
+	}
+	return ret;
 }
 
 /**
@@ -320,13 +330,25 @@ int
 gnutls_pkcs12_export2(gnutls_pkcs12_t pkcs12,
 		      gnutls_x509_crt_fmt_t format, gnutls_datum_t * out)
 {
+	int ret;
+
 	if (pkcs12 == NULL) {
 		gnutls_assert();
 		return GNUTLS_E_INVALID_REQUEST;
 	}
 
-	return _gnutls_x509_export_int2(pkcs12->pkcs12, format, PEM_PKCS12,
-					out);
+	ret = _gnutls_x509_export_int2(pkcs12->pkcs12, format, PEM_PKCS12,
+				       out);
+	if (ret < 0) {
+		_gnutls_switch_fips_state(GNUTLS_FIPS140_OP_ERROR);
+	} else {
+		/* PKCS#12 export is always non-approved, because the MAC
+		 * calculation involves non-approved KDF (PKCS#12 KDF) and
+		 * without MAC the protection is insufficient.
+		 */
+		_gnutls_switch_fips_state(GNUTLS_FIPS140_OP_NOT_APPROVED);
+	}
+	return ret;
 }
 
 static int oid2bag(const char *oid)
@@ -370,7 +392,7 @@ _pkcs12_decode_safe_contents(const gnutls_datum_t * content,
 			     gnutls_pkcs12_bag_t bag)
 {
 	char oid[MAX_OID_SIZE], root[MAX_NAME_SIZE];
-	ASN1_TYPE c2 = ASN1_TYPE_EMPTY;
+	asn1_node c2 = NULL;
 	int len, result;
 	int bag_type;
 	gnutls_datum_t attr_val;
@@ -478,7 +500,7 @@ _pkcs12_decode_safe_contents(const gnutls_datum_t * content,
 			for (j = 0; j < attributes; j++) {
 
 				snprintf(root, sizeof(root),
-					 "?%u.bagAttributes.?%u", i + 1,
+					 "?%u.bagAttributes.?%d", i + 1,
 					 j + 1);
 
 				result =
@@ -552,7 +574,7 @@ _pkcs12_decode_safe_contents(const gnutls_datum_t * content,
 
 
 static int
-_parse_safe_contents(ASN1_TYPE sc, const char *sc_name,
+_parse_safe_contents(asn1_node sc, const char *sc_name,
 		     gnutls_pkcs12_bag_t bag)
 {
 	gnutls_datum_t content = { NULL, 0 };
@@ -603,7 +625,7 @@ int
 gnutls_pkcs12_get_bag(gnutls_pkcs12_t pkcs12,
 		      int indx, gnutls_pkcs12_bag_t bag)
 {
-	ASN1_TYPE c2 = ASN1_TYPE_EMPTY;
+	asn1_node c2 = NULL;
 	int result, len;
 	char root2[MAX_NAME_SIZE];
 	char oid[MAX_OID_SIZE];
@@ -624,7 +646,7 @@ gnutls_pkcs12_get_bag(gnutls_pkcs12_t pkcs12,
 	/* Step 2. Parse the AuthenticatedSafe
 	 */
 
-	snprintf(root2, sizeof(root2), "?%u.contentType", indx + 1);
+	snprintf(root2, sizeof(root2), "?%d.contentType", indx + 1);
 
 	len = sizeof(oid) - 1;
 	result = asn1_read_value(c2, root2, oid, &len);
@@ -643,7 +665,7 @@ gnutls_pkcs12_get_bag(gnutls_pkcs12_t pkcs12,
 	/* Not encrypted Bag
 	 */
 
-	snprintf(root2, sizeof(root2), "?%u.content", indx + 1);
+	snprintf(root2, sizeof(root2), "?%d.content", indx + 1);
 
 	if (strcmp(oid, DATA_OID) == 0) {
 		result = _parse_safe_contents(c2, root2, bag);
@@ -671,11 +693,11 @@ gnutls_pkcs12_get_bag(gnutls_pkcs12_t pkcs12,
 
 /* Creates an empty PFX structure for the PKCS12 structure.
  */
-static int create_empty_pfx(ASN1_TYPE pkcs12)
+static int create_empty_pfx(asn1_node pkcs12)
 {
 	uint8_t three = 3;
 	int result;
-	ASN1_TYPE c2 = ASN1_TYPE_EMPTY;
+	asn1_node c2 = NULL;
 
 	/* Use version 3
 	 */
@@ -737,8 +759,8 @@ static int create_empty_pfx(ASN1_TYPE pkcs12)
  **/
 int gnutls_pkcs12_set_bag(gnutls_pkcs12_t pkcs12, gnutls_pkcs12_bag_t bag)
 {
-	ASN1_TYPE c2 = ASN1_TYPE_EMPTY;
-	ASN1_TYPE safe_cont = ASN1_TYPE_EMPTY;
+	asn1_node c2 = NULL;
+	asn1_node safe_cont = NULL;
 	int result;
 	int enc = 0, dum = 1;
 	char null;
@@ -865,32 +887,22 @@ _gnutls_pkcs12_gost_string_to_key(gnutls_mac_algorithm_t algo,
 {
 	uint8_t temp[96];
 	size_t temp_len = sizeof(temp);
-	unsigned int pass_len = 0;
+	gnutls_datum_t key;
+	gnutls_datum_t _salt;
+	int ret;
 
 	if (iter == 0)
 		return gnutls_assert_val(GNUTLS_E_INVALID_REQUEST);
 
-	if (pass)
-		pass_len = strlen(pass);
+	key.data = (void *)pass;
+	key.size = pass ? strlen(pass) : 0;
 
-	if (algo == GNUTLS_MAC_GOSTR_94)
-		pbkdf2_hmac_gosthash94cp(pass_len, (uint8_t *) pass,
-				iter,
-				salt_size,
-				salt, temp_len, temp);
-	else if (algo == GNUTLS_MAC_STREEBOG_256)
-		pbkdf2_hmac_streebog256(pass_len, (uint8_t *) pass,
-				iter,
-				salt_size,
-				salt, temp_len, temp);
-	else if (algo == GNUTLS_MAC_STREEBOG_512)
-		pbkdf2_hmac_streebog512(pass_len, (uint8_t *) pass,
-				iter,
-				salt_size,
-				salt, temp_len, temp);
-	else
-		/* Should not reach here */
-		return gnutls_assert_val(GNUTLS_E_INVALID_REQUEST);
+	_salt.data = (void *)salt;
+	_salt.size = salt_size;
+
+	ret = gnutls_pbkdf2(algo, &key, &_salt, iter, temp, temp_len);
+	if (ret < 0)
+		return gnutls_assert_val(ret);
 
 	memcpy(keybuf, temp + temp_len - req_keylen, req_keylen);
 
@@ -913,7 +925,7 @@ int gnutls_pkcs12_generate_mac2(gnutls_pkcs12_t pkcs12, gnutls_mac_algorithm_t m
 {
 	uint8_t salt[8], key[MAX_HASH_SIZE];
 	int result;
-	const int iter = 10*1024;
+	const int iter = PKCS12_ITER_COUNT;
 	mac_hd_st td1;
 	gnutls_datum_t tmp = { NULL, 0 };
 	unsigned mac_size, key_len;
@@ -1038,9 +1050,12 @@ int gnutls_pkcs12_generate_mac2(gnutls_pkcs12_t pkcs12, gnutls_mac_algorithm_t m
 		goto cleanup;
 	}
 
+	/* _gnutls_pkcs12_string_to_key is not a FIPS approved operation */
+	_gnutls_switch_fips_state(GNUTLS_FIPS140_OP_NOT_APPROVED);
 	return 0;
 
       cleanup:
+	_gnutls_switch_fips_state(GNUTLS_FIPS140_OP_ERROR);
 	_gnutls_free_datum(&tmp);
 	return result;
 }
@@ -1057,7 +1072,7 @@ int gnutls_pkcs12_generate_mac2(gnutls_pkcs12_t pkcs12, gnutls_mac_algorithm_t m
  **/
 int gnutls_pkcs12_generate_mac(gnutls_pkcs12_t pkcs12, const char *pass)
 {
-	return gnutls_pkcs12_generate_mac2(pkcs12, GNUTLS_MAC_SHA1, pass);
+	return gnutls_pkcs12_generate_mac2(pkcs12, GNUTLS_MAC_SHA256, pass);
 }
 
 /**
@@ -1112,7 +1127,7 @@ int gnutls_pkcs12_verify_mac(gnutls_pkcs12_t pkcs12, const char *pass)
 		return _gnutls_asn2err(result);
 	}
 
-	algo = gnutls_oid_to_digest(oid);
+	algo = DIG_TO_MAC(gnutls_oid_to_digest(oid));
 	if (algo == GNUTLS_MAC_UNKNOWN) {
  unknown_mac:
 		gnutls_assert();
@@ -1216,8 +1231,11 @@ pkcs12_try_gost:
 		goto cleanup;
 	}
 
+	/* _gnutls_pkcs12_string_to_key is not a FIPS approved operation */
+	_gnutls_switch_fips_state(GNUTLS_FIPS140_OP_NOT_APPROVED);
 	result = 0;
  cleanup:
+	_gnutls_switch_fips_state(GNUTLS_FIPS140_OP_ERROR);
 	_gnutls_free_datum(&tmp);
 	_gnutls_free_datum(&salt);
 	return result;
@@ -1226,7 +1244,7 @@ pkcs12_try_gost:
 
 static int
 write_attributes(gnutls_pkcs12_bag_t bag, int elem,
-		 ASN1_TYPE c2, const char *where)
+		 asn1_node c2, const char *where)
 {
 	int result;
 	char root[128];
@@ -1329,10 +1347,10 @@ write_attributes(gnutls_pkcs12_bag_t bag, int elem,
  * the given datum. Enc is set to non-zero if the data are encrypted;
  */
 int
-_pkcs12_encode_safe_contents(gnutls_pkcs12_bag_t bag, ASN1_TYPE * contents,
+_pkcs12_encode_safe_contents(gnutls_pkcs12_bag_t bag, asn1_node * contents,
 			     int *enc)
 {
-	ASN1_TYPE c2 = ASN1_TYPE_EMPTY;
+	asn1_node c2 = NULL;
 	int result;
 	unsigned i;
 	const char *oid;
@@ -1469,10 +1487,13 @@ static int make_chain(gnutls_x509_crt_t ** chain, unsigned int *chain_len,
 			    != 0)
 				goto skip;
 
-			*chain =
-			    gnutls_realloc_fast(*chain,
-						sizeof((*chain)[0]) *
-						++(*chain_len));
+			if (unlikely(INT_ADD_OVERFLOW(*chain_len, 1))) {
+				return gnutls_assert_val(GNUTLS_E_MEMORY_ERROR);
+			}
+
+			*chain = _gnutls_reallocarray_fast(*chain,
+							   ++(*chain_len),
+							   sizeof((*chain)[0]));
 			if (*chain == NULL) {
 				gnutls_assert();
 				return GNUTLS_E_MEMORY_ERROR;
@@ -1792,12 +1813,15 @@ gnutls_pkcs12_simple_parse(gnutls_pkcs12_t p12,
 				}
 
 				if (memcmp(cert_id, key_id, cert_id_size) != 0) {	/* they don't match - skip the certificate */
+					if (unlikely(INT_ADD_OVERFLOW(_extra_certs_len, 1))) {
+						ret = gnutls_assert_val(GNUTLS_E_MEMORY_ERROR);
+						goto done;
+					}
+
 					_extra_certs =
-						gnutls_realloc_fast
-						(_extra_certs,
-						 sizeof(_extra_certs
-							[0]) *
-						 ++_extra_certs_len);
+						_gnutls_reallocarray_fast(_extra_certs,
+									  ++_extra_certs_len,
+									  sizeof(_extra_certs[0]));
 					if (!_extra_certs) {
 						gnutls_assert();
 						ret =
@@ -1984,7 +2008,7 @@ gnutls_pkcs12_mac_info(gnutls_pkcs12_t pkcs12, unsigned int *mac,
 		*oid = (char*)tmp.data;
 	}
 
-	algo = gnutls_oid_to_digest((char*)tmp.data);
+	algo = DIG_TO_MAC(gnutls_oid_to_digest((char*)tmp.data));
 	if (algo == GNUTLS_MAC_UNKNOWN || mac_to_entry(algo) == NULL) {
 		gnutls_assert();
 		return GNUTLS_E_UNKNOWN_HASH_ALGORITHM;

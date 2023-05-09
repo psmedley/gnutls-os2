@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2002-2014 Free Software Foundation, Inc.
+ * Copyright (C) 2002-2021 Free Software Foundation, Inc.
  *
  * This file is part of LIBTASN1.
  *
@@ -18,6 +18,9 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
  * 02110-1301, USA
  */
+
+#ifndef GSTR_H
+# define GSTR_H
 
 unsigned int _asn1_str_cpy (char *dest, size_t dest_tot_size,
 			    const char *src);
@@ -40,3 +43,5 @@ void safe_memset(void *data, int c, size_t size)
 		memset(data, c, size);
 	} while(vdata[volatile_zero] != c);
 }
+
+#endif /* GSTR_H */

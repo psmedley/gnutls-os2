@@ -18,12 +18,12 @@
 # along with GnuTLS; if not, write to the Free Software Foundation,
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
 
-srcdir="${srcdir:-.}"
-P11TOOL="${P11TOOL:-../src/p11tool${EXEEXT}}"
-CERTTOOL="${CERTTOOL:-../src/certtool${EXEEXT}}"
-DIFF="${DIFF:-diff -b -B}"
-SERV="${SERV:-../src/gnutls-serv${EXEEXT}}"
-CLI="${CLI:-../src/gnutls-cli${EXEEXT}}"
+: ${srcdir=.}
+: ${P11TOOL=../src/p11tool${EXEEXT}}
+: ${CERTTOOL=../src/certtool${EXEEXT}}
+: ${DIFF=diff -b -B}
+: ${SERV=../src/gnutls-serv${EXEEXT}}
+: ${CLI=../src/gnutls-cli${EXEEXT}}
 RETCODE=0
 
 if test "${GNUTLS_FORCE_FIPS_MODE}" = 1;then
@@ -67,6 +67,8 @@ have_ed25519=0
 P11TOOL="${VALGRIND} ${P11TOOL} --batch"
 SERV="${SERV} -q"
 
+TESTDATE=2020-12-01
+
 . ${srcdir}/scripts/common.sh
 
 rm -f "${LOGFILE}"
@@ -78,6 +80,8 @@ exit_error () {
 	tail "${LOGFILE}"
 	exit 1
 }
+
+skip_if_no_datefudge
 
 # $1: token
 # $2: PIN
@@ -109,6 +113,41 @@ write_privkey () {
 	${P11TOOL} ${ADDITIONAL_PARAM} --login --list-privkeys "${token};object=gnutls-client2" | grep "CKA_SENSITIVE" >/dev/null 2>&1
 	if test $? != 0; then
 		echo "private object was not sensitive"
+		exit_error
+	fi
+	echo ok
+
+	echo -n "* Checking whether object was not marked always authenticate... "
+	${P11TOOL} ${ADDITIONAL_PARAM} --login --list-privkeys "${token};object=gnutls-client2" | grep "CKA_ALWAYS_AUTH" >/dev/null 2>&1
+	if test $? != 1; then
+		echo "private object was always authenticate"
+		exit_error
+	fi
+	echo ok
+}
+
+# $1: token
+# $2: PIN
+# $3: filename
+# ${srcdir}/testpkcs11-certs/client.key
+write_privkey_always_auth () {
+	export GNUTLS_PIN="$2"
+	filename="$3"
+	token="$1"
+
+	echo -n "* Writing a client private key... "
+	${P11TOOL} ${ADDITIONAL_PARAM} --login --write --label gnutls-client2 --load-privkey "${filename}" --mark-always-authenticate "${token}" >>"${LOGFILE}" 2>&1
+	if test $? = 0; then
+		echo ok
+	else
+		echo failed
+		exit_error
+	fi
+
+	echo -n "* Checking whether object was marked always authenticate... "
+	${P11TOOL} ${ADDITIONAL_PARAM} --login --list-privkeys "${token};object=gnutls-client2" | grep "CKA_ALWAYS_AUTH" >/dev/null 2>&1
+	if test $? != 0; then
+		echo "private object was not always authenticate"
 		exit_error
 	fi
 	echo ok
@@ -523,6 +562,7 @@ write_certificate_test () {
 	pubkey="$5"
 
 	echo -n "* Generating client certificate... "
+	datefudge -s "$TESTDATE" \
 	"${CERTTOOL}" ${CERTTOOL_PARAM} ${ADDITIONAL_PARAM}  --generate-certificate --load-ca-privkey "${cakey}"  --load-ca-certificate "${cacert}"  \
 	--template ${srcdir}/testpkcs11-certs/client-tmpl --load-privkey "${token};object=gnutls-client;object-type=private" \
 	--load-pubkey "$pubkey" --outfile tmp-client.crt >>"${LOGFILE}" 2>&1
@@ -900,7 +940,9 @@ use_certificate_test () {
 	echo -n "* Using PKCS #11 with gnutls-cli (${txt})... "
 	# start server
 	eval "${GETPORT}"
-	launch_pkcs11_server $$ "${ADDITIONAL_PARAM}" --echo --priority NORMAL --x509certfile="${certfile}" \
+	launch_bare_server datefudge -s "$TESTDATE" \
+	        $VALGRIND $SERV $DEBUG -p "$PORT" \
+		${ADDITIONAL_PARAM} --debug 10 --echo --priority NORMAL --x509certfile="${certfile}" \
 		--x509keyfile="$keyfile" --x509cafile="${cafile}" \
 		--verify-client-cert --require-client-cert >>"${LOGFILE}" 2>&1
 
@@ -908,13 +950,16 @@ use_certificate_test () {
 	wait_server ${PID}
 
 	# connect to server using SC
+	datefudge -s "$TESTDATE" \
 	${VALGRIND} "${CLI}" ${ADDITIONAL_PARAM} -p "${PORT}" localhost --priority NORMAL --x509cafile="${cafile}" </dev/null >>"${LOGFILE}" 2>&1 && \
 		fail ${PID} "Connection should have failed!"
 
+	datefudge -s "$TESTDATE" \
 	${VALGRIND} "${CLI}" ${ADDITIONAL_PARAM} -p "${PORT}" localhost --priority NORMAL --x509certfile="${certfile}" \
 	--x509keyfile="$keyfile" --x509cafile="${cafile}" </dev/null >>"${LOGFILE}" 2>&1 || \
 		fail ${PID} "Connection (with files) should have succeeded!"
 
+	datefudge -s "$TESTDATE" \
 	${VALGRIND} "${CLI}" ${ADDITIONAL_PARAM} -p "${PORT}" localhost --priority NORMAL --x509certfile="${token};object=gnutls-client;object-type=cert" \
 		--x509keyfile="${token};object=gnutls-client;object-type=private" \
 		--x509cafile="${cafile}" </dev/null >>"${LOGFILE}" 2>&1 || \
@@ -931,8 +976,15 @@ reset_pins () {
 	UPIN="$2"
 	SOPIN="$3"
 	NEWPIN=88654321
-	LARGE_NEWPIN="1234123412341234123412341234123" #31 chars
-	TOO_LARGE_NEWPIN="12341234123412341234123412341234" #32 chars
+	# 255 chars
+	LARGE_NEWPIN="\
+1234123412341234123412341234123412341234123412341234123412341234\
+1234123412341234123412341234123412341234123412341234123412341234\
+1234123412341234123412341234123412341234123412341234123412341234\
+123412341234123412341234123412341234123412341234123412341234123\
+"
+	# 256 chars
+	TOO_LARGE_NEWPIN="$LARGE_NEWPIN"4
 
 	echo -n "* Setting SO PIN... "
 	# Test admin PIN
@@ -1114,6 +1166,7 @@ reset_pins "${TOKEN}" "${TEST_PIN}" "${TEST_SO_PIN}"
 
 #write a given privkey
 write_privkey "${TOKEN}" "${TEST_PIN}" "${srcdir}/testpkcs11-certs/client.key"
+write_privkey_always_auth "${TOKEN}" "${TEST_PIN}" "${srcdir}/testpkcs11-certs/client.key"
 
 generate_temp_ecc_privkey "${TOKEN}" "${TEST_PIN}" 256
 delete_temp_privkey "${TOKEN}" "${TEST_PIN}" ecc-256

@@ -53,7 +53,7 @@ gl_uninorm_compose_hash (register const char *str, register size_t len)
   return asso_values[(unsigned char)str[5]+1] + asso_values[(unsigned char)str[2]] + asso_values[(unsigned char)str[1]];
 }
 
-const struct composition_rule *
+static const struct composition_rule *
 gl_uninorm_compose_lookup (register const char *str, register size_t len)
 {
   static const unsigned char lengthtable[] =

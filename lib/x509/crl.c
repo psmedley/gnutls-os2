@@ -300,7 +300,7 @@ gnutls_x509_crl_get_dn_oid(gnutls_x509_crl_t crl,
 /**
  * gnutls_x509_crl_get_issuer_dn2:
  * @crl: should contain a #gnutls_x509_crl_t type
- * @dn: a pointer to a structure to hold the name
+ * @dn: a pointer to a structure to hold the name; must be freed using gnutls_free()
  *
  * This function will allocate buffer and copy the name of the CRL issuer.
  * The name will be in the form "C=xxxx,O=yyyy,CN=zzzz" as
@@ -331,7 +331,7 @@ gnutls_x509_crl_get_issuer_dn2(gnutls_x509_crl_t crl, gnutls_datum_t * dn)
 /**
  * gnutls_x509_crl_get_issuer_dn3:
  * @crl: should contain a #gnutls_x509_crl_t type
- * @dn: a pointer to a structure to hold the name
+ * @dn: a pointer to a structure to hold the name; must be freed using gnutls_free()
  * @flags: zero or %GNUTLS_X509_DN_FLAG_COMPAT
  *
  * This function will allocate buffer and copy the name of the CRL issuer.
@@ -484,23 +484,12 @@ gnutls_x509_crl_get_signature(gnutls_x509_crl_t crl,
  **/
 int gnutls_x509_crl_get_version(gnutls_x509_crl_t crl)
 {
-	uint8_t version[8];
-	int len, result;
-
 	if (crl == NULL) {
 		gnutls_assert();
 		return GNUTLS_E_INVALID_REQUEST;
 	}
 
-	len = sizeof(version);
-	if ((result =
-	     asn1_read_value(crl->crl, "tbsCertList.version", version,
-			     &len)) != ASN1_SUCCESS) {
-		gnutls_assert();
-		return _gnutls_asn2err(result);
-	}
-
-	return (int) version[0] + 1;
+	return _gnutls_x509_get_version(crl->crl, "tbsCertList.version");
 }
 
 /**
@@ -695,7 +684,7 @@ gnutls_x509_crl_iter_crt_serial(gnutls_x509_crl_t crl,
 		(*iter)->rcache_idx = 1;
 	} else {
 		snprintf(serial_name, sizeof(serial_name),
-			 "?%d", (*iter)->rcache_idx);
+			 "?%u", (*iter)->rcache_idx);
 		(*iter)->rcache = asn1_find_node ((*iter)->rcache, serial_name);
 	}
 	if ((*iter)->rcache == NULL) {
@@ -705,7 +694,7 @@ gnutls_x509_crl_iter_crt_serial(gnutls_x509_crl_t crl,
 	}
 
 	snprintf(serial_name, sizeof(serial_name),
-		 "?%d.userCertificate", (*iter)->rcache_idx);
+		 "?%u.userCertificate", (*iter)->rcache_idx);
 
 	_serial_size = *serial_size;
 	result =
@@ -724,7 +713,7 @@ gnutls_x509_crl_iter_crt_serial(gnutls_x509_crl_t crl,
 
 	if (t) {
 		snprintf(date_name, sizeof(date_name),
-			 "?%d.revocationDate", (*iter)->rcache_idx);
+			 "?%u.revocationDate", (*iter)->rcache_idx);
 		*t = _gnutls_x509_get_time((*iter)->rcache, date_name, 0);
 	}
 
@@ -853,13 +842,13 @@ int _gnutls_x509_crl_cpy(gnutls_x509_crl_t dest, gnutls_x509_crl_t src)
 }
 
 static int
-_get_authority_key_id(gnutls_x509_crl_t cert, ASN1_TYPE * c2,
+_get_authority_key_id(gnutls_x509_crl_t cert, asn1_node * c2,
 		      unsigned int *critical)
 {
 	int ret;
 	gnutls_datum_t id;
 
-	*c2 = ASN1_TYPE_EMPTY;
+	*c2 = NULL;
 
 	if (cert == NULL) {
 		gnutls_assert();
@@ -931,7 +920,7 @@ gnutls_x509_crl_get_authority_key_gn_serial(gnutls_x509_crl_t crl,
 					    unsigned int *critical)
 {
 	int ret, result, len;
-	ASN1_TYPE c2;
+	asn1_node c2;
 
 	ret = _get_authority_key_id(crl, &c2, critical);
 	if (ret < 0)
@@ -996,7 +985,7 @@ gnutls_x509_crl_get_authority_key_id(gnutls_x509_crl_t crl, void *id,
 				     unsigned int *critical)
 {
 	int result, len, ret;
-	ASN1_TYPE c2;
+	asn1_node c2;
 
 	ret = _get_authority_key_id(crl, &c2, critical);
 	if (ret < 0)
@@ -1273,7 +1262,7 @@ gnutls_x509_crl_list_import2(gnutls_x509_crl_t ** crls,
 	unsigned int init = 1024;
 	int ret;
 
-	*crls = gnutls_malloc(sizeof(gnutls_x509_crl_t) * init);
+	*crls = _gnutls_reallocarray(NULL, init, sizeof(gnutls_x509_crl_t));
 	if (*crls == NULL) {
 		gnutls_assert();
 		return GNUTLS_E_MEMORY_ERROR;
@@ -1283,9 +1272,8 @@ gnutls_x509_crl_list_import2(gnutls_x509_crl_t ** crls,
 	    gnutls_x509_crl_list_import(*crls, &init, data, format,
 					flags | GNUTLS_X509_CRT_LIST_IMPORT_FAIL_IF_EXCEED);
 	if (ret == GNUTLS_E_SHORT_MEMORY_BUFFER) {
-		*crls =
-		    gnutls_realloc_fast(*crls,
-					sizeof(gnutls_x509_crl_t) * init);
+		*crls = _gnutls_reallocarray_fast(*crls, init,
+						  sizeof(gnutls_x509_crl_t));
 		if (*crls == NULL) {
 			gnutls_assert();
 			return GNUTLS_E_MEMORY_ERROR;

@@ -331,6 +331,8 @@ int wrap_padlock_hash_fast(gnutls_digest_algorithm_t algo,
 			   const void *text, size_t text_size,
 			   void *digest)
 {
+	if (text_size == 0 && text == NULL)
+		text = digest;
 	if (algo == GNUTLS_DIG_SHA1) {
 		uint32_t iv[5] = {
 			0x67452301UL,
@@ -362,7 +364,6 @@ int wrap_padlock_hash_fast(gnutls_digest_algorithm_t algo,
 		wrap_padlock_hash_update(&ctx, text, text_size);
 
 		wrap_padlock_hash_output(&ctx, digest, ctx.length);
-		wrap_padlock_hash_deinit(&ctx);
 	}
 
 	return 0;
@@ -374,7 +375,7 @@ const struct nettle_hash padlock_sha256 = NN_HASH(sha256, padlock_sha256_update,
 const struct nettle_hash padlock_sha384 = NN_HASH(sha384, padlock_sha512_update, padlock_sha512_digest, SHA384);
 const struct nettle_hash padlock_sha512 = NN_HASH(sha512, padlock_sha512_update, padlock_sha512_digest, SHA512);
 
-const gnutls_crypto_digest_st _gnutls_sha_padlock = {
+const gnutls_crypto_digest_st _gnutls_sha_padlock_oneshot = {
 	.init = NULL,
 	.hash = NULL,
 	.output = NULL,
@@ -382,7 +383,7 @@ const gnutls_crypto_digest_st _gnutls_sha_padlock = {
 	.fast = wrap_padlock_hash_fast
 };
 
-const gnutls_crypto_digest_st _gnutls_sha_padlock_nano = {
+const gnutls_crypto_digest_st _gnutls_sha_padlock = {
 	.init = wrap_padlock_hash_init,
 	.hash = wrap_padlock_hash_update,
 	.output = wrap_padlock_hash_output,

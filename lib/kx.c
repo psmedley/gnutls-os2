@@ -54,7 +54,7 @@ static int generate_normal_master(gnutls_session_t session,
 
 int _gnutls_generate_master(gnutls_session_t session, int keep_premaster)
 {
-	if (session->internals.resumed == RESUME_FALSE)
+	if (!session->internals.resumed)
 		return generate_normal_master(session, &session->key.key,
 					      keep_premaster);
 	else if (session->internals.premaster_set) {
@@ -70,25 +70,100 @@ int _gnutls_generate_master(gnutls_session_t session, int keep_premaster)
 	return 0;
 }
 
+/**
+ * gnutls_session_get_keylog_function:
+ * @session: is #gnutls_session_t type
+ *
+ * This function will return the callback function set using
+ * gnutls_session_set_keylog_function().
+ *
+ * Returns: The function set or %NULL otherwise.
+ *
+ * Since: 3.6.13
+ */
+gnutls_keylog_func
+gnutls_session_get_keylog_function(const gnutls_session_t session)
+{
+	return session->internals.keylog_func;
+}
+
+/**
+ * gnutls_session_set_keylog_function:
+ * @session: is #gnutls_session_t type
+ * @func: is the function to be called
+ *
+ * This function will set a callback to be called when a new secret is
+ * derived and installed during handshake.
+ *
+ * Since: 3.6.13
+ */
+void
+gnutls_session_set_keylog_function(gnutls_session_t session,
+				   gnutls_keylog_func func)
+{
+	session->internals.keylog_func = func;
+}
+
+int
+_gnutls_call_keylog_func(gnutls_session_t session,
+			 const char *label,
+			 const uint8_t *data,
+			 unsigned size)
+{
+	if (session->internals.keylog_func) {
+		gnutls_datum_t secret = {(void*)data, size};
+		return session->internals.keylog_func(session, label, &secret);
+	}
+	return 0;
+}
+
+int
+_gnutls_nss_keylog_func(gnutls_session_t session,
+			const char *label,
+			const gnutls_datum_t *secret)
+{
+	/* ignore subsequent traffic secrets that are calculated from
+	 * the previous traffic secret
+	 */
+	if (!session->internals.handshake_in_progress)
+		return 0;
+
+	_gnutls_nss_keylog_write(session, label, secret->data, secret->size);
+	return 0;
+}
+
+/* GCC analyzer doesn't like static FILE pointer */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wanalyzer-file-leak"
+
+GNUTLS_ONCE(keylog_once);
+
+static void
+keylog_once_init(void)
+{
+	const char *keylogfile;
+
+	keylogfile = secure_getenv("SSLKEYLOGFILE");
+	if (keylogfile != NULL && *keylogfile != '\0') {
+		keylog = fopen(keylogfile, "ae");
+		_gnutls_debug_log("unable to open keylog file %s\n",
+				  keylogfile);
+	}
+}
+
 void _gnutls_nss_keylog_write(gnutls_session_t session,
 			      const char *label,
 			      const uint8_t *secret, size_t secret_size)
 {
-	static const char *keylogfile = NULL;
-	static unsigned checked_env = 0;
-
-	if (!checked_env) {
-		checked_env = 1;
-		keylogfile = secure_getenv("SSLKEYLOGFILE");
-		if (keylogfile != NULL)
-			keylog = fopen(keylogfile, "a");
-	}
+	(void)gnutls_once(&keylog_once, keylog_once_init);
 
 	if (keylog) {
 		char client_random_hex[2*GNUTLS_RANDOM_SIZE+1];
 		char secret_hex[2*MAX_HASH_SIZE+1];
 
-		GNUTLS_STATIC_MUTEX_LOCK(keylog_mutex);
+		if (gnutls_static_mutex_lock(&keylog_mutex) < 0) {
+			return;
+		}
 		fprintf(keylog, "%s %s %s\n",
 			label,
 			_gnutls_bin2hex(session->security_parameters.
@@ -98,7 +173,7 @@ void _gnutls_nss_keylog_write(gnutls_session_t session,
 			_gnutls_bin2hex(secret, secret_size,
 					secret_hex, sizeof(secret_hex), NULL));
 		fflush(keylog);
-		GNUTLS_STATIC_MUTEX_UNLOCK(keylog_mutex);
+		(void)gnutls_static_mutex_unlock(&keylog_mutex);
 	}
 }
 
@@ -109,6 +184,8 @@ void _gnutls_nss_keylog_deinit(void)
 		keylog = NULL;
 	}
 }
+
+#pragma GCC diagnostic pop
 
 /* here we generate the TLS Master secret.
  */
@@ -141,6 +218,8 @@ generate_normal_master(gnutls_session_t session,
 		       session->security_parameters.server_random,
 		       GNUTLS_RANDOM_SIZE);
 
+		_gnutls_memory_mark_defined(session->security_parameters.master_secret,
+					    GNUTLS_MASTER_SIZE);
 #ifdef ENABLE_SSL3
 		if (get_num_version(session) == GNUTLS_SSL3) {
 			ret =
@@ -159,6 +238,9 @@ generate_normal_master(gnutls_session_t session,
 					GNUTLS_MASTER_SIZE,
 					session->security_parameters.
 					master_secret);
+		if (ret < 0)
+			_gnutls_memory_mark_undefined(session->security_parameters.master_secret,
+						      GNUTLS_MASTER_SIZE);
 	} else {
 		gnutls_datum_t shash = {NULL, 0};
 
@@ -171,6 +253,8 @@ generate_normal_master(gnutls_session_t session,
 			return gnutls_assert_val(GNUTLS_E_INTERNAL_ERROR);
 #endif
 
+		_gnutls_memory_mark_defined(session->security_parameters.master_secret,
+					    GNUTLS_MASTER_SIZE);
 		ret =
 		    _gnutls_PRF(session, premaster->data, premaster->size,
 				EXT_MASTER_SECRET, EXT_MASTER_SECRET_SIZE,
@@ -178,19 +262,24 @@ generate_normal_master(gnutls_session_t session,
 				GNUTLS_MASTER_SIZE,
 				session->security_parameters.
 				master_secret);
+		if (ret < 0)
+			_gnutls_memory_mark_undefined(session->security_parameters.master_secret,
+						      GNUTLS_MASTER_SIZE);
 
 		gnutls_free(shash.data);
 	}
-
-	_gnutls_nss_keylog_write(session, "CLIENT_RANDOM",
-				 session->security_parameters.master_secret,
-				 GNUTLS_MASTER_SIZE);
 
 	if (!keep_premaster)
 		_gnutls_free_temp_key_datum(premaster);
 
 	if (ret < 0)
 		return ret;
+
+	ret = _gnutls_call_keylog_func(session, "CLIENT_RANDOM",
+				       session->security_parameters.master_secret,
+				       GNUTLS_MASTER_SIZE);
+	if (ret < 0)
+		return gnutls_assert_val(ret);
 
 	_gnutls_hard_log("INT: MASTER SECRET[%d]: %s\n",
 			 GNUTLS_MASTER_SIZE,

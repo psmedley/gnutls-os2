@@ -71,14 +71,19 @@
 #include <common.h>
 #include <socket.h>
 
-#include <cli-args.h>
+#include "gnutls-cli-options.h"
 #include <ocsptool-common.h>
 
 #define MAX_BUF 4096
 
+#define HEADER_PATTERN "GET /%s HTTP/1.0\r\n" \
+  "Host: %s\r\n" \
+  "Accept: */*\r\n" \
+  "Connection: close\r\n\r\n"
+
 /* global stuff here */
 int resume, starttls, insecure, ranges, rehandshake, udp, mtu,
-    inline_commands;
+    inline_commands, waitresumption;
 unsigned int global_vflags = 0;
 char *hostname = NULL;
 char service[32]="";
@@ -118,6 +123,12 @@ static gnutls_certificate_credentials_t xcred;
 static void check_server_cmd(socket_st * socket, int ret);
 static void init_global_tls_stuff(void);
 static int cert_verify_ocsp(gnutls_session_t session);
+static const char *host_from_url(const char *url, unsigned int *port, const char **path);
+static size_t get_data(void *buf, size_t size, size_t nmemb, void *userp);
+static int getissuer_callback(const gnutls_x509_trust_list_t tlist,
+			      const gnutls_x509_crt_t cert,
+			      gnutls_x509_crt_t **issuers,
+			      unsigned int *issuers_size);
 
 #define MAX_CRT 6
 static unsigned int x509_crt_size;
@@ -358,6 +369,84 @@ static void try_save_cert(gnutls_session_t session)
 	return;
 }
 
+static void try_save_ocsp_status(gnutls_session_t session)
+{
+	unsigned int cert_num = 0;
+	gnutls_certificate_get_peers(session, &cert_num);
+	if (cert_num == 0) {
+		fprintf(stderr, "no certificates sent by server, so can't get OCSP status!\n");
+		return;
+	}
+
+	const char *path;
+	gnutls_x509_crt_fmt_t type;
+	unsigned int max_out;
+
+	/* This function is called if exactly one of SAVE_OCSP and
+	 * SAVE_OCSP_MULTI is set. */
+	if (HAVE_OPT(SAVE_OCSP))
+	{
+		path = OPT_ARG(SAVE_OCSP);
+		type = GNUTLS_X509_FMT_DER;
+		max_out = 1;
+	} else {
+		path = OPT_ARG(SAVE_OCSP_MULTI);
+		type = GNUTLS_X509_FMT_PEM;
+		max_out = cert_num;
+	}
+
+	FILE *fp = fopen(path, "w");
+	if (fp == NULL) {
+		fprintf(stderr, "could not open %s for writing\n", path);
+		exit(1);
+	}
+
+	for (unsigned int i = 0; i < max_out; i++) {
+		gnutls_datum_t oresp;
+		int ret = gnutls_ocsp_status_request_get2(session, i, &oresp);
+		if (ret == GNUTLS_E_REQUESTED_DATA_NOT_AVAILABLE) {
+			fprintf(stderr, "no OCSP response for certificate %u\n", i);
+			continue;
+		} else if (ret < 0) {
+			fprintf(stderr, "error getting OCSP response %u: %s\n",
+			        i, gnutls_strerror(ret));
+			exit(1);
+		}
+
+		if (type == GNUTLS_X509_FMT_DER) {
+			/* on success the return value is equal to the
+			 * number of items (third parameter) */
+			if (fwrite(oresp.data, oresp.size, 1, fp) != 1) {
+				fprintf(stderr, "writing to %s failed\n", path);
+				exit(1);
+			}
+			continue;
+		}
+
+		gnutls_datum_t t;
+		ret = gnutls_pem_base64_encode_alloc("OCSP RESPONSE",
+		                                     &oresp, &t);
+		if (ret < 0) {
+			fprintf(stderr, "error allocating PEM OCSP response: %s\n",
+			        gnutls_strerror(ret));
+			exit(1);
+		}
+
+		/* on success the return value is equal to the number
+		 * of items (third parameter) */
+		if (fwrite(t.data, t.size, 1, fp) != 1) {
+			fprintf(stderr, "writing to %s failed\n", path);
+			exit(1);
+		}
+		gnutls_free(t.data);
+	}
+	if (fclose(fp) != 0) {
+		perror("failed to close OCSP save file");
+	}
+
+	return;
+}
+
 static int cert_verify_callback(gnutls_session_t session)
 {
 	int rc;
@@ -367,7 +456,6 @@ static int cert_verify_callback(gnutls_session_t session)
 	int dane = ENABLED_OPT(DANE);
 	int ca_verify = ENABLED_OPT(CA_VERIFICATION);
 	const char *txt_service;
-	gnutls_datum_t oresp;
 	const char *host;
 
 	/* On an session with TOFU the PKI/DANE verification
@@ -390,23 +478,12 @@ static int cert_verify_callback(gnutls_session_t session)
 	}
 
 #ifndef ENABLE_OCSP
-	if (HAVE_OPT(SAVE_OCSP) || HAVE_OPT(OCSP)) {
+	if (HAVE_OPT(SAVE_OCSP_MULTI) || HAVE_OPT(SAVE_OCSP) || HAVE_OPT(OCSP)) {
 		fprintf(stderr, "OCSP is not supported!\n");
 	}
 #else
-	rc = gnutls_ocsp_status_request_get(session, &oresp);
-	if (rc < 0) {
-		oresp.data = NULL;
-		oresp.size = 0;
-	}
-
-	if (HAVE_OPT(SAVE_OCSP) && oresp.data) {
-		FILE *fp = fopen(OPT_ARG(SAVE_OCSP), "w");
-
-		if (fp != NULL) {
-			fwrite(oresp.data, 1, oresp.size, fp);
-			fclose(fp);
-		}
+	if (HAVE_OPT(SAVE_OCSP_MULTI) || HAVE_OPT(SAVE_OCSP)) {
+		try_save_ocsp_status(session);
 	}
 #endif
 
@@ -743,6 +820,14 @@ gnutls_session_t init_tls_session(const char *host)
 		}
 	}
 
+	if (HAVE_OPT(COMPRESS_CERT) && disable_extensions == 0) {
+		ret = compress_cert_set_methods(session,
+						OPTS_ARRAY(COMPRESS_CERT),
+						OPTS_COUNT(COMPRESS_CERT));
+		if (ret < 0)
+			exit(1);
+	}
+
 	if (HAVE_OPT(HEARTBEAT))
 		gnutls_heartbeat_enable(session,
 					GNUTLS_HB_PEER_ALLOWED_TO_SEND);
@@ -926,11 +1011,19 @@ static int try_resume(socket_st * hd)
 	gnutls_datum_t edata = {NULL, 0};
 
 	if (gnutls_session_is_resumed(hd->session) == 0) {
-		/* not resumed - obtain the session data */
-		ret = gnutls_session_get_data2(hd->session, &rdata);
-		if (ret < 0) {
-			rdata.data = NULL;
-		}
+		do {
+			/* not resumed - obtain the session data */
+			ret = gnutls_session_get_data2(hd->session, &rdata);
+			if (ret < 0) {
+				rdata.data = NULL;
+			}
+
+			if ((gnutls_protocol_get_version(hd->session) != GNUTLS_TLS1_3) ||
+					((gnutls_session_get_flags(hd->session) &
+					 GNUTLS_SFLAGS_SESSION_TICKET))) {
+				break;
+			}
+		} while (waitresumption);
 	} else {
 		/* resumed - try to reuse the previous session data */
 		rdata.data = hd->rdata.data;
@@ -962,7 +1055,7 @@ static int try_resume(socket_st * hd)
 			fprintf(stderr, "could not open %s\n", OPT_ARG(EARLYDATA));
 			exit(1);
 		}
-		edata.data = (void *) fread_file(fp, &size);
+		edata.data = (void *) fread_file(fp, 0, &size);
 		edata.size = size;
 		fclose(fp);
 	}
@@ -1555,6 +1648,16 @@ static void cmd_parser(int argc, char **argv)
 		exit(1);
 	}
 
+	if (HAVE_OPT(LIST_CONFIG)) {
+		const gnutls_library_config_st *p;
+
+		for (p = gnutls_get_library_config(); p->name; p++) {
+			log_msg(stdout, "%s: %s\n", p->name, p->value);
+		}
+		log_msg(stdout, "system-config: %s\n", gnutls_get_system_config_file());
+		exit(0);
+	}
+
 	if (HAVE_OPT(BENCHMARK_CIPHERS)) {
 		benchmark_cipher(OPT_VALUE_DEBUG);
 		exit(0);
@@ -1622,6 +1725,7 @@ static void cmd_parser(int argc, char **argv)
 	rehandshake = HAVE_OPT(REHANDSHAKE);
 	insecure = HAVE_OPT(INSECURE);
 	ranges = HAVE_OPT(RANGES);
+	waitresumption = HAVE_OPT(WAITRESUMPTION);
 
 	if (insecure || HAVE_OPT(VERIFY_ALLOW_BROKEN)) {
 		global_vflags |= GNUTLS_VERIFY_ALLOW_BROKEN;
@@ -1874,6 +1978,7 @@ psk_callback(gnutls_session_t session, char **username,
 
 static void init_global_tls_stuff(void)
 {
+	gnutls_x509_trust_list_t tlist;
 	int ret;
 
 #ifdef ENABLE_PKCS11
@@ -1905,13 +2010,24 @@ static void init_global_tls_stuff(void)
 	gnutls_certificate_set_verify_flags(xcred, global_vflags);
 	gnutls_certificate_set_flags(xcred, GNUTLS_CERTIFICATE_VERIFY_CRLS);
 
+	if (gnutls_x509_trust_list_init(&tlist, 0) < 0) {
+		fprintf(stderr, "Trust list allocation memory error\n");
+		exit(1);
+	}
+	gnutls_certificate_set_trust_list(xcred, tlist, 0);
+
 	if (x509_cafile != NULL) {
-		ret = gnutls_certificate_set_x509_trust_file(xcred,
-							     x509_cafile,
-							     x509ctype);
+		ret = gnutls_x509_trust_list_add_trust_file(tlist,
+                                                            x509_cafile,
+                                                            NULL,
+                                                            x509ctype,
+                                                            GNUTLS_TL_USE_IN_TLS,
+                                                            0);
 	} else {
 		if (insecure == 0) {
-			ret = gnutls_certificate_set_x509_system_trust(xcred);
+			ret = gnutls_x509_trust_list_add_system_trust(tlist,
+                                                                      GNUTLS_TL_USE_IN_TLS,
+                                                                      0);
 			if (ret == GNUTLS_E_UNIMPLEMENTED_FEATURE) {
 				fprintf(stderr, "Warning: this system doesn't support a default trust store\n");
 				ret = 0;
@@ -1926,6 +2042,9 @@ static void init_global_tls_stuff(void)
 	} else {
 		log_msg(stdout, "Processed %d CA certificate(s).\n", ret);
 	}
+
+	if (ENABLED_OPT(CA_AUTO_RETRIEVE))
+		gnutls_x509_trust_list_set_getissuer_function(tlist, getissuer_callback);
 
 	if (x509_crlfile != NULL) {
 		ret =
@@ -2090,3 +2209,164 @@ cleanup:
 	return ok >= 1 ? (int) ok : -1;
 }
 #endif
+
+/* returns the host part of a URL */
+static const char *host_from_url(const char *url, unsigned int *port, const char **path)
+{
+	static char buffer[512];
+	char *p;
+
+	*port = 0;
+	*path = "";
+
+	if ((p = strstr(url, "http://")) != NULL) {
+		snprintf(buffer, sizeof(buffer), "%s", p + 7);
+		p = strchr(buffer, '/');
+		if (p != NULL) {
+			*p = 0;
+			*path = p+1;
+		}
+
+		p = strchr(buffer, ':');
+		if (p != NULL) {
+			*p = 0;
+			*port = atoi(p + 1);
+		}
+
+		return buffer;
+	} else {
+		return url;
+	}
+}
+
+static size_t get_data(void *buf, size_t size, size_t nmemb, void *userp)
+{
+	gnutls_datum_t *ud = userp;
+
+	size *= nmemb;
+
+	ud->data = realloc(ud->data, size + ud->size);
+	if (ud->data == NULL) {
+		fprintf(stderr, "Not enough memory for the request\n");
+		exit(1);
+	}
+
+	memcpy(&ud->data[ud->size], buf, size);
+	ud->size += size;
+
+	return size;
+}
+
+/* Returns 0 on ok, and -1 on error */
+static int
+getissuer_callback(const gnutls_x509_trust_list_t tlist,
+		   const gnutls_x509_crt_t cert,
+		   gnutls_x509_crt_t **issuers,
+		   unsigned int *issuers_size)
+{
+	gnutls_datum_t ud;
+	int ret;
+	gnutls_datum_t resp;
+	char *url = NULL;
+	char headers[1024];
+	char _service[16];
+	unsigned char *p;
+	const char *_hostname;
+	const char *path = "";
+	unsigned i;
+	unsigned int headers_size = 0, port;
+	socket_st hd;
+	gnutls_x509_crt_t issuer;
+	gnutls_datum_t data = { NULL, 0 };
+	static char buffer[MAX_BUF + 1];
+
+	sockets_init();
+
+	i = 0;
+	do {
+		ret = gnutls_x509_crt_get_authority_info_access(cert, i++,
+				GNUTLS_IA_CAISSUERS_URI,
+				&data,
+				NULL);
+	} while (ret == GNUTLS_E_UNKNOWN_ALGORITHM);
+
+	if (ret < 0) {
+		fprintf(stderr,
+				"*** Cannot find caIssuer URI in certificate: %s\n",
+				gnutls_strerror(ret));
+		return 0;
+	}
+
+	url = malloc(data.size + 1);
+	if (url == NULL) {
+		return -1;
+	}
+	memcpy(url, data.data, data.size);
+	url[data.size] = 0;
+
+	gnutls_free(data.data);
+
+	_hostname = host_from_url(url, &port, &path);
+	if (port != 0)
+		snprintf(_service, sizeof(_service), "%u", port);
+	else
+		strcpy(_service, "80");
+
+	fprintf(stderr, "Connecting to caIssuer server: %s...\n", _hostname);
+
+	memset(&ud, 0, sizeof(ud));
+
+	snprintf(headers, sizeof(headers), HEADER_PATTERN, path, _hostname);
+	headers_size = strlen(headers);
+
+	socket_open(&hd, _hostname, _service, NULL, SOCKET_FLAG_RAW|SOCKET_FLAG_SKIP_INIT, CONNECT_MSG, NULL);
+	socket_send(&hd, headers, headers_size);
+
+	do {
+		ret = socket_recv(&hd, buffer, sizeof(buffer));
+		if (ret > 0)
+			get_data(buffer, ret, 1, &ud);
+	} while (ret > 0);
+
+	if (ret < 0 || ud.size == 0) {
+		perror("recv");
+		ret = -1;
+		socket_bye(&hd, 0);
+		goto cleanup;
+	}
+
+	socket_bye(&hd, 0);
+
+	p = memmem(ud.data, ud.size, "\r\n\r\n", 4);
+	if (p == NULL) {
+		fprintf(stderr, "Cannot interpret HTTP response\n");
+		ret = -1;
+		goto cleanup;
+	}
+	p += 4;
+	resp.size = ud.size - (p - ud.data);
+	resp.data = p;
+
+	ret = gnutls_x509_crt_init(&issuer);
+	if (ret < 0) {
+		fprintf(stderr, "Memory error\n");
+		ret = -1;
+		goto cleanup;
+	}
+	ret = gnutls_x509_crt_list_import2(issuers, issuers_size, &resp,
+					   GNUTLS_X509_FMT_DER, 0);
+	if (ret < 0) {
+		fprintf(stderr, "Decoding error: %s\n", gnutls_strerror(ret));
+		ret = -1;
+		goto cleanup;
+	}
+
+	ret = 0;
+
+cleanup:
+	gnutls_free(data.data);
+	free(ud.data);
+	free(url);
+
+	return ret;
+}

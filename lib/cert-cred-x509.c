@@ -254,7 +254,7 @@ parse_pem_cert_mem(gnutls_certificate_credentials_t res,
 		goto cleanup;
 	}
 
-	pcerts = gnutls_malloc(sizeof(gnutls_pcert_st) * count);
+	pcerts = _gnutls_reallocarray(NULL, count, sizeof(gnutls_pcert_st));
 	if (pcerts == NULL) {
 		gnutls_assert();
 		return GNUTLS_E_MEMORY_ERROR;
@@ -441,7 +441,8 @@ read_cert_url(gnutls_certificate_credentials_t res, gnutls_privkey_t key, const 
 
 	_gnutls_str_array_init(&names);
 
-	ccert = gnutls_malloc(sizeof(*ccert)*MAX_PKCS11_CERT_CHAIN);
+	ccert = _gnutls_reallocarray(NULL, MAX_PKCS11_CERT_CHAIN,
+				     sizeof(*ccert));
 	if (ccert == NULL) {
 		gnutls_assert();
 		ret = GNUTLS_E_MEMORY_ERROR;
@@ -543,7 +544,7 @@ read_cert_file(gnutls_certificate_credentials_t res,
 		return read_cert_url(res, key, certfile);
 	}
 
-	data = read_binary_file(certfile, &size);
+	data = read_file(certfile, RF_BINARY, &size);
 
 	if (data == NULL) {
 		gnutls_assert();
@@ -588,7 +589,7 @@ _gnutls_read_key_file(gnutls_certificate_credentials_t res,
 			    (GNUTLS_E_UNIMPLEMENTED_FEATURE);
 	}
 
-	data = read_binary_file(keyfile, &size);
+	data = read_file(keyfile, RF_BINARY | RF_SENSITIVE, &size);
 
 	if (data == NULL) {
 		gnutls_assert();
@@ -596,6 +597,7 @@ _gnutls_read_key_file(gnutls_certificate_credentials_t res,
 	}
 
 	ret = _gnutls_read_key_mem(res, data, size, type, pass, flags, rkey);
+	zeroize_key(data, size);
 	free(data);
 
 	return ret;
@@ -738,9 +740,13 @@ gnutls_certificate_set_x509_key(gnutls_certificate_credentials_t res,
 				gnutls_x509_privkey_t key)
 {
 	int ret;
+	int npcerts = 0;
 	gnutls_privkey_t pkey;
 	gnutls_pcert_st *pcerts = NULL;
 	gnutls_str_array_t names;
+
+	if (cert_list == NULL || cert_list_size < 1)
+		return gnutls_assert_val(GNUTLS_E_INVALID_REQUEST);
 
 	_gnutls_str_array_init(&names);
 
@@ -765,7 +771,8 @@ gnutls_certificate_set_x509_key(gnutls_certificate_credentials_t res,
 	}
 
 	/* load certificates */
-	pcerts = gnutls_malloc(sizeof(gnutls_pcert_st) * cert_list_size);
+	pcerts = _gnutls_reallocarray(NULL, cert_list_size,
+				      sizeof(gnutls_pcert_st));
 	if (pcerts == NULL) {
 		gnutls_assert();
 		return GNUTLS_E_MEMORY_ERROR;
@@ -784,10 +791,11 @@ gnutls_certificate_set_x509_key(gnutls_certificate_credentials_t res,
 		gnutls_assert();
 		goto cleanup;
 	}
+	npcerts = cert_list_size;
 
 	ret =
 	    _gnutls_certificate_credential_append_keypair(res, pkey, names, pcerts,
-						   cert_list_size);
+						   npcerts);
 	if (ret < 0) {
 		gnutls_assert();
 		goto cleanup;
@@ -806,6 +814,8 @@ gnutls_certificate_set_x509_key(gnutls_certificate_credentials_t res,
 	CRED_RET_SUCCESS(res);
 
       cleanup:
+	while (npcerts-- > 0)
+		gnutls_pcert_deinit(&pcerts[npcerts]);
 	gnutls_free(pcerts);
 	_gnutls_str_array_clear(&names);
 	return ret;
@@ -893,8 +903,9 @@ gnutls_certificate_get_x509_crt(gnutls_certificate_credentials_t res,
 	}
 
 	*crt_list_size = res->certs[index].cert_list_length;
-	*crt_list = gnutls_malloc(
-		res->certs[index].cert_list_length * sizeof (gnutls_x509_crt_t));
+	*crt_list = _gnutls_reallocarray(NULL,
+					 res->certs[index].cert_list_length,
+					 sizeof (gnutls_x509_crt_t));
 	if (*crt_list == NULL) {
 		gnutls_assert();
 		return GNUTLS_E_MEMORY_ERROR;
@@ -925,8 +936,6 @@ gnutls_certificate_get_x509_crt(gnutls_certificate_credentials_t res,
  * Note that the @tlist will become part of the credentials
  * structure and must not be deallocated. It will be automatically deallocated
  * when the @res structure is deinitialized.
- *
- * Returns: %GNUTLS_E_SUCCESS (0) on success, or a negative error code.
  *
  * Since: 3.2.2
  **/
@@ -1138,8 +1147,13 @@ gnutls_certificate_set_x509_trust(gnutls_certificate_credentials_t res,
 				  int ca_list_size)
 {
 	int ret, i, j;
-	gnutls_x509_crt_t *new_list = gnutls_malloc(ca_list_size * sizeof(gnutls_x509_crt_t));
+	gnutls_x509_crt_t *new_list;
 
+	if (ca_list == NULL || ca_list_size < 1)
+		return gnutls_assert_val(GNUTLS_E_INVALID_REQUEST);
+
+	new_list = _gnutls_reallocarray(NULL, ca_list_size,
+					sizeof(gnutls_x509_crt_t));
 	if (!new_list)
 		return GNUTLS_E_MEMORY_ERROR;
 
@@ -1323,12 +1337,15 @@ gnutls_certificate_set_x509_crl(gnutls_certificate_credentials_t res,
 				int crl_list_size)
 {
 	int ret, i, j;
-	gnutls_x509_crl_t *new_crl = gnutls_malloc(crl_list_size * sizeof(gnutls_x509_crl_t));
-	unsigned flags = GNUTLS_TL_USE_IN_TLS;
+	gnutls_x509_crl_t *new_crl;
+	unsigned flags;
 
+	flags = GNUTLS_TL_USE_IN_TLS;
 	if (res->flags & GNUTLS_CERTIFICATE_VERIFY_CRLS)
 		flags |= GNUTLS_TL_VERIFY_CRL|GNUTLS_TL_FAIL_ON_INVALID_CRL;
 
+	new_crl = _gnutls_reallocarray(NULL, crl_list_size,
+				       sizeof(gnutls_x509_crl_t));
 	if (!new_crl)
 		return GNUTLS_E_MEMORY_ERROR;
 
@@ -1447,7 +1464,8 @@ int
 	size_t size;
 	int ret;
 
-	p12blob.data = (void *) read_binary_file(pkcs12file, &size);
+	p12blob.data = (void *) read_file(pkcs12file, RF_BINARY | RF_SENSITIVE,
+					  &size);
 	p12blob.size = (unsigned int) size;
 	if (p12blob.data == NULL) {
 		gnutls_assert();
@@ -1457,7 +1475,9 @@ int
 	ret =
 	    gnutls_certificate_set_x509_simple_pkcs12_mem(res, &p12blob,
 							  type, password);
+	zeroize_key(p12blob.data, p12blob.size);
 	free(p12blob.data);
+	p12blob.size = 0;
 
 	return ret;
 }

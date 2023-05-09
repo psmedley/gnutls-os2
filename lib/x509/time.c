@@ -245,6 +245,8 @@ time_t _gnutls_x509_generalTime2gtime(const char *ttime)
 	return time2gtime(ttime, year);
 }
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-y2k"
 /* tag will contain ASN1_TAG_UTCTime or ASN1_TAG_GENERALIZEDTime */
 static int
 gtime_to_suitable_time(time_t gtime, char *str_time, size_t str_time_size, unsigned *tag)
@@ -285,6 +287,7 @@ gtime_to_suitable_time(time_t gtime, char *str_time, size_t str_time_size, unsig
 
 	return 0;
 }
+#pragma GCC diagnostic pop
 
 static int
 gtime_to_generalTime(time_t gtime, char *str_time, size_t str_time_size)
@@ -316,11 +319,11 @@ gtime_to_generalTime(time_t gtime, char *str_time, size_t str_time_size)
 }
 
 
-/* Extracts the time in time_t from the ASN1_TYPE given. When should
+/* Extracts the time in time_t from the asn1_node given. When should
  * be something like "tbsCertList.thisUpdate".
  */
 #define MAX_TIME 64
-time_t _gnutls_x509_get_time(ASN1_TYPE c2, const char *where, int force_general)
+time_t _gnutls_x509_get_time(asn1_node c2, const char *where, int force_general)
 {
 	char ttime[MAX_TIME];
 	char name[128];
@@ -375,11 +378,11 @@ time_t _gnutls_x509_get_time(ASN1_TYPE c2, const char *where, int force_general)
 	return c_time;
 }
 
-/* Sets the time in time_t in the ASN1_TYPE given. Where should
+/* Sets the time in time_t in the asn1_node given. Where should
  * be something like "tbsCertList.thisUpdate".
  */
 int
-_gnutls_x509_set_time(ASN1_TYPE c2, const char *where, time_t tim,
+_gnutls_x509_set_time(asn1_node c2, const char *where, time_t tim,
 		      int force_general)
 {
 	char str_time[MAX_TIME];
@@ -435,7 +438,7 @@ _gnutls_x509_set_time(ASN1_TYPE c2, const char *where, time_t tim,
  * which are of the ANY.
  */
 int
-_gnutls_x509_set_raw_time(ASN1_TYPE c2, const char *where, time_t tim)
+_gnutls_x509_set_raw_time(asn1_node c2, const char *where, time_t tim)
 {
 	char str_time[MAX_TIME];
 	uint8_t buf[128];

@@ -34,7 +34,7 @@
 #include <datum.h>
 
 int
-_gnutls_get_extension(ASN1_TYPE asn, const char *root,
+_gnutls_get_extension(asn1_node asn, const char *root,
 	      const char *extension_id, int indx,
 	      gnutls_datum_t * ret, unsigned int *_critical)
 {
@@ -53,7 +53,7 @@ _gnutls_get_extension(ASN1_TYPE asn, const char *root,
 	do {
 		k++;
 
-		snprintf(name, sizeof(name), "%s.?%u", root, k);
+		snprintf(name, sizeof(name), "%s.?%d", root, k);
 
 		_gnutls_str_cpy(name2, sizeof(name2), name);
 		_gnutls_str_cat(name2, sizeof(name2), ".extnID");
@@ -131,7 +131,7 @@ _gnutls_get_extension(ASN1_TYPE asn, const char *root,
 }
 
 static int
-get_indx_extension(ASN1_TYPE asn, const char *root,
+get_indx_extension(asn1_node asn, const char *root,
 	      int indx, gnutls_datum_t * out)
 {
 	char name[MAX_NAME_SIZE];
@@ -140,7 +140,7 @@ get_indx_extension(ASN1_TYPE asn, const char *root,
 	out->data = NULL;
 	out->size = 0;
 
-	snprintf(name, sizeof(name), "%s.?%u.extnValue", root, indx+1);
+	snprintf(name, sizeof(name), "%s.?%d.extnValue", root, indx+1);
 
 	ret = _gnutls_x509_read_value(asn, name, out);
 	if (ret < 0)
@@ -226,7 +226,7 @@ gnutls_x509_crl_get_extension_data2(gnutls_x509_crl_t crl,
  * If you have passed the last extension, GNUTLS_E_REQUESTED_DATA_NOT_AVAILABLE will
  * be returned.
  */
-static int get_extension_oid(ASN1_TYPE asn, const char *root,
+static int get_extension_oid(asn1_node asn, const char *root,
 		  unsigned indx, void *oid, size_t * sizeof_oid)
 {
 	int k, result, len;
@@ -238,7 +238,7 @@ static int get_extension_oid(ASN1_TYPE asn, const char *root,
 	do {
 		k++;
 
-		snprintf(name, sizeof(name), "%s.?%u", root, k);
+		snprintf(name, sizeof(name), "%s.?%d", root, k);
 
 		_gnutls_str_cpy(name2, sizeof(name2), name);
 		_gnutls_str_cat(name2, sizeof(name2), ".extnID");
@@ -313,7 +313,7 @@ _gnutls_x509_crl_get_extension_oid(gnutls_x509_crl_t crl,
  * Critical will be either 0 or 1.
  */
 static int
-add_extension(ASN1_TYPE asn, const char *root, const char *extension_id,
+add_extension(asn1_node asn, const char *root, const char *extension_id,
 	      const gnutls_datum_t * ext_data, unsigned int critical)
 {
 	int result;
@@ -375,7 +375,7 @@ add_extension(ASN1_TYPE asn, const char *root, const char *extension_id,
  * index here starts from one.
  */
 static int
-overwrite_extension(ASN1_TYPE asn, const char *root, unsigned int indx,
+overwrite_extension(asn1_node asn, const char *root, unsigned int indx,
 		    const gnutls_datum_t * ext_data, unsigned int critical)
 {
 	char name[MAX_NAME_SIZE], name2[MAX_NAME_SIZE];
@@ -414,7 +414,7 @@ overwrite_extension(ASN1_TYPE asn, const char *root, unsigned int indx,
 }
 
 int
-_gnutls_set_extension(ASN1_TYPE asn, const char *root,
+_gnutls_set_extension(asn1_node asn, const char *root,
 	      const char *ext_id,
 	      const gnutls_datum_t * ext_data, unsigned int critical)
 {
@@ -430,9 +430,9 @@ _gnutls_set_extension(ASN1_TYPE asn, const char *root,
 		k++;
 
 		if (root[0] != 0)
-			snprintf(name, sizeof(name), "%s.?%u", root, k);
+			snprintf(name, sizeof(name), "%s.?%d", root, k);
 		else
-			snprintf(name, sizeof(name), "?%u", k);
+			snprintf(name, sizeof(name), "?%d", k);
 
 		len = sizeof(extnID) - 1;
 		result = asn1_read_value(asn, name, extnID, &len);
@@ -525,7 +525,7 @@ _gnutls_x509_crq_set_extension(gnutls_x509_crq_t crq,
 	unsigned char *extensions = NULL;
 	size_t extensions_size = 0;
 	gnutls_datum_t der;
-	ASN1_TYPE c2;
+	asn1_node c2;
 	int result;
 
 	result =
@@ -614,7 +614,7 @@ _gnutls_x509_ext_extract_number(uint8_t * number,
 				size_t * _nr_size,
 				uint8_t * extnValue, int extnValueLen)
 {
-	ASN1_TYPE ext = ASN1_TYPE_EMPTY;
+	asn1_node ext = NULL;
 	int result;
 	int nr_size = *_nr_size;
 
@@ -656,7 +656,7 @@ int
 _gnutls_x509_ext_gen_number(const uint8_t * number, size_t nr_size,
 			    gnutls_datum_t * der_ext)
 {
-	ASN1_TYPE ext = ASN1_TYPE_EMPTY;
+	asn1_node ext = NULL;
 	int result;
 
 	result =
@@ -687,7 +687,7 @@ _gnutls_x509_ext_gen_number(const uint8_t * number, size_t nr_size,
 }
 
 int
-_gnutls_write_general_name(ASN1_TYPE ext, const char *ext_name,
+_gnutls_write_general_name(asn1_node ext, const char *ext_name,
 		       gnutls_x509_subject_alt_name_t type,
 		       const void *data, unsigned int data_size)
 {
@@ -742,7 +742,7 @@ _gnutls_write_general_name(ASN1_TYPE ext, const char *ext_name,
 }
 
 int
-_gnutls_write_new_general_name(ASN1_TYPE ext, const char *ext_name,
+_gnutls_write_new_general_name(asn1_node ext, const char *ext_name,
 		       gnutls_x509_subject_alt_name_t type,
 		       const void *data, unsigned int data_size)
 {
@@ -773,7 +773,7 @@ _gnutls_write_new_general_name(ASN1_TYPE ext, const char *ext_name,
 }
 
 int
-_gnutls_write_new_othername(ASN1_TYPE ext, const char *ext_name,
+_gnutls_write_new_othername(asn1_node ext, const char *ext_name,
 		       const char *oid,
 		       const void *data, unsigned int data_size)
 {

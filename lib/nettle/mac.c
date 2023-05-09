@@ -32,23 +32,16 @@
 #include <nettle/sha3.h>
 #include <nettle/hmac.h>
 #include <nettle/umac.h>
+#include <nettle/hkdf.h>
+#include <nettle/pbkdf2.h>
+#include <nettle/cmac.h>
 #if ENABLE_GOST
 #include "gost/hmac-gost.h"
-#ifndef HAVE_NETTLE_GOSTHASH94CP_UPDATE
-#include "gost/gosthash94.h"
-#endif
-#ifndef HAVE_NETTLE_STREEBOG512_UPDATE
-#include "gost/streebog.h"
-#endif
 #ifndef HAVE_NETTLE_GOST28147_SET_KEY
 #include "gost/gost28147.h"
 #endif
+#include "gost/cmac.h"
 #endif
-#ifdef HAVE_NETTLE_CMAC128_UPDATE
-#include <nettle/cmac.h>
-#else
-#include "cmac.h"
-#endif /* HAVE_NETTLE_CMAC128_UPDATE */
 #include <nettle/gcm.h>
 
 typedef void (*update_func) (void *, size_t, const uint8_t *);
@@ -117,6 +110,8 @@ struct nettle_mac_ctx {
 		struct hmac_streebog256_ctx streebog256;
 		struct hmac_streebog512_ctx streebog512;
 		struct gost28147_imit_ctx gost28147_imit;
+		struct cmac_magma_ctx magma;
+		struct cmac_kuznyechik_ctx kuznyechik;
 #endif
 		struct umac96_ctx umac96;
 		struct umac128_ctx umac128;
@@ -138,8 +133,20 @@ struct nettle_mac_ctx {
 static void
 _wrap_gost28147_imit_set_key_tc26z(void *ctx, size_t len, const uint8_t * key)
 {
-	gost28147_imit_set_key(ctx, len, key);
 	gost28147_imit_set_param(ctx, &gost28147_param_TC26_Z);
+	gost28147_imit_set_key(ctx, len, key);
+}
+
+static void
+_wrap_cmac_magma_set_key(void *ctx, size_t len, const uint8_t * key)
+{
+	cmac_magma_set_key(ctx, key);
+}
+
+static void
+_wrap_cmac_kuznyechik_set_key(void *ctx, size_t len, const uint8_t * key)
+{
+	cmac_kuznyechik_set_key(ctx, key);
 }
 #endif
 
@@ -336,6 +343,20 @@ static int _mac_ctx_init(gnutls_mac_algorithm_t algo,
 		ctx->ctx_ptr = &ctx->ctx.gost28147_imit;
 		ctx->length = GOST28147_IMIT_DIGEST_SIZE;
 		break;
+	case GNUTLS_MAC_MAGMA_OMAC:
+		ctx->update = (update_func) cmac_magma_update;
+		ctx->digest = (digest_func) cmac_magma_digest;
+		ctx->set_key = _wrap_cmac_magma_set_key;
+		ctx->ctx_ptr = &ctx->ctx.magma;
+		ctx->length = CMAC64_DIGEST_SIZE;
+		break;
+	case GNUTLS_MAC_KUZNYECHIK_OMAC:
+		ctx->update = (update_func) cmac_kuznyechik_update;
+		ctx->digest = (digest_func) cmac_kuznyechik_digest;
+		ctx->set_key = _wrap_cmac_kuznyechik_set_key;
+		ctx->ctx_ptr = &ctx->ctx.kuznyechik;
+		ctx->length = CMAC128_DIGEST_SIZE;
+		break;
 #endif
 	case GNUTLS_MAC_UMAC_96:
 		ctx->update = (update_func) umac96_update;
@@ -451,6 +472,8 @@ static int wrap_nettle_mac_exists(gnutls_mac_algorithm_t algo)
 	case GNUTLS_MAC_STREEBOG_256:
 	case GNUTLS_MAC_STREEBOG_512:
 	case GNUTLS_MAC_GOST28147_TC26Z_IMIT:
+	case GNUTLS_MAC_MAGMA_OMAC:
+	case GNUTLS_MAC_KUZNYECHIK_OMAC:
 #endif
 		return 1;
 	default:
@@ -585,17 +608,20 @@ static int wrap_nettle_hash_exists(gnutls_digest_algorithm_t algo)
 	case GNUTLS_DIG_SHA256:
 	case GNUTLS_DIG_SHA384:
 	case GNUTLS_DIG_SHA512:
-		return 1;
+
+#ifdef NETTLE_SHA3_FIPS202
 	case GNUTLS_DIG_SHA3_224:
 	case GNUTLS_DIG_SHA3_256:
 	case GNUTLS_DIG_SHA3_384:
 	case GNUTLS_DIG_SHA3_512:
-#ifdef NETTLE_SHA3_FIPS202
-		return 1;
-#else
-		return 0;
 #endif
+
+	case GNUTLS_DIG_SHAKE_128:
+	case GNUTLS_DIG_SHAKE_256:
+
 	case GNUTLS_DIG_MD2:
+	case GNUTLS_DIG_RMD160:
+
 #if ENABLE_GOST
 	case GNUTLS_DIG_GOSTR_94:
 	case GNUTLS_DIG_STREEBOG_256:
@@ -762,8 +788,11 @@ static int wrap_nettle_hash_fast(gnutls_digest_algorithm_t algo,
 	if (ret < 0)
 		return gnutls_assert_val(ret);
 
-	ctx.update(&ctx, text_size, text);
+	if (text_size > 0) {
+		ctx.update(&ctx, text_size, text);
+	}
 	ctx.digest(&ctx, ctx.length, digest);
+	zeroize_temp_key(&ctx, sizeof(ctx));
 
 	return 0;
 }
@@ -825,6 +854,77 @@ wrap_nettle_hash_output(void *src_ctx, void *digest, size_t digestsize)
 	return 0;
 }
 
+/* KDF functions based on MAC
+ */
+static int
+wrap_nettle_hkdf_extract (gnutls_mac_algorithm_t mac,
+			  const void *key, size_t keysize,
+			  const void *salt, size_t saltsize,
+			  void *output)
+{
+	struct nettle_mac_ctx ctx;
+	int ret;
+
+	ret = _mac_ctx_init(mac, &ctx);
+	if (ret < 0)
+		return gnutls_assert_val(ret);
+
+	ctx.set_key(&ctx, saltsize, salt);
+	hkdf_extract(&ctx.ctx, ctx.update, ctx.digest, ctx.length,
+		     keysize, key, output);
+
+	zeroize_temp_key(&ctx, sizeof(ctx));
+	return 0;
+}
+
+static int
+wrap_nettle_hkdf_expand (gnutls_mac_algorithm_t mac,
+			 const void *key, size_t keysize,
+			 const void *info, size_t infosize,
+			 void *output, size_t length)
+{
+	struct nettle_mac_ctx ctx;
+	int ret;
+
+	ret = _mac_ctx_init(mac, &ctx);
+	if (ret < 0)
+		return gnutls_assert_val(ret);
+
+	/* RFC 5869 2.3: L must be <= 255 * HashLen */
+	if (length > ctx.length * 255) {
+		return gnutls_assert_val(GNUTLS_E_INVALID_REQUEST);
+	}
+
+	ctx.set_key(&ctx, keysize, key);
+	hkdf_expand(&ctx.ctx, ctx.update, ctx.digest, ctx.length,
+		    infosize, info, length, output);
+	zeroize_temp_key(&ctx, sizeof(ctx));
+
+	return 0;
+}
+
+static int
+wrap_nettle_pbkdf2 (gnutls_mac_algorithm_t mac,
+		    const void *key, size_t keysize,
+		    const void *salt, size_t saltsize,
+		    unsigned iter_count,
+		    void *output, size_t length)
+{
+	struct nettle_mac_ctx ctx;
+	int ret;
+
+	ret = _mac_ctx_init(mac, &ctx);
+	if (ret < 0)
+		return gnutls_assert_val(ret);
+
+	ctx.set_key(&ctx, keysize, key);
+	pbkdf2(&ctx.ctx, ctx.update, ctx.digest, ctx.length,
+	       iter_count, saltsize, salt, length, output);
+	zeroize_temp_key(&ctx, sizeof(ctx));
+
+	return 0;
+}
+
 gnutls_crypto_mac_st _gnutls_mac_ops = {
 	.init = wrap_nettle_mac_init,
 	.setkey = wrap_nettle_mac_set_key,
@@ -845,4 +945,14 @@ gnutls_crypto_digest_st _gnutls_digest_ops = {
 	.fast = wrap_nettle_hash_fast,
 	.exists = wrap_nettle_hash_exists,
 	.copy = wrap_nettle_hash_copy,
+};
+
+/* These names are clashing with nettle's name mangling. */
+#undef hkdf_extract
+#undef hkdf_expand
+#undef pbkdf2
+gnutls_crypto_kdf_st _gnutls_kdf_ops = {
+	.hkdf_extract = wrap_nettle_hkdf_extract,
+	.hkdf_expand = wrap_nettle_hkdf_expand,
+	.pbkdf2 = wrap_nettle_pbkdf2,
 };

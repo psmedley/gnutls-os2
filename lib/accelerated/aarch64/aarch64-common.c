@@ -41,6 +41,10 @@
 # ifdef AT_HWCAP
 #  define USE_AUXVAL
 # endif
+#elif defined(__OpenBSD__)
+# include <sys/sysctl.h>
+# include <machine/cpu.h>
+# include <machine/armreg.h>
 #endif
 
 #if defined(__GNUC__)
@@ -93,6 +97,24 @@ static void discover_caps(unsigned int *caps)
 	if (c & HWCAP_SHA2)
 		*caps |= ARMV8_SHA256;
 	if (c & HWCAP_SHA512)
+		*caps |= ARMV8_SHA512;
+#elif defined(__OpenBSD__) && defined(CPU_ID_AA64ISAR0)
+	const int isar0_mib[] = { CTL_MACHDEP, CPU_ID_AA64ISAR0 };
+	uint64_t isar0;
+	size_t len = sizeof(isar0);
+
+	*caps |= ARMV7_NEON;
+	if (sysctl(isar0_mib, 2, &isar0, &len, NULL, 0) < 0)
+		return;
+	if (ID_AA64ISAR0_AES(isar0) >= ID_AA64ISAR0_AES_BASE)
+		*caps |= ARMV8_AES;
+	if (ID_AA64ISAR0_AES(isar0) >= ID_AA64ISAR0_AES_PMULL)
+		*caps |= ARMV8_PMULL;
+	if (ID_AA64ISAR0_SHA1(isar0) >= ID_AA64ISAR0_SHA1_BASE)
+		*caps |= ARMV8_SHA1;
+	if (ID_AA64ISAR0_SHA2(isar0) >= ID_AA64ISAR0_SHA2_BASE)
+		*caps |= ARMV8_SHA256;
+	if (ID_AA64ISAR0_SHA2(isar0) >= ID_AA64ISAR0_SHA2_512)
 		*caps |= ARMV8_SHA512;
 #endif
 }
@@ -200,6 +222,14 @@ void _register_aarch64_crypto(unsigned capabilities)
 			ret =
 			    gnutls_crypto_single_cipher_register
 			    (GNUTLS_CIPHER_AES_128_GCM, 90,
+			     &_gnutls_aes_gcm_aarch64, 0);
+			if (ret < 0) {
+					gnutls_assert();
+				}
+
+			ret =
+			    gnutls_crypto_single_cipher_register
+			    (GNUTLS_CIPHER_AES_192_GCM, 90,
 			     &_gnutls_aes_gcm_aarch64, 0);
 			if (ret < 0) {
 					gnutls_assert();

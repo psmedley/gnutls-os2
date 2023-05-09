@@ -280,7 +280,10 @@ wrap_padlock_hmac_output(void *src_ctx, void *digest, size_t digestsize)
 
 static void wrap_padlock_hmac_deinit(void *hd)
 {
-	gnutls_free(hd);
+	struct padlock_hmac_ctx *ctx = hd;
+
+	zeroize_temp_key(ctx, sizeof(*ctx));
+	gnutls_free(ctx);
 }
 
 static int
@@ -316,6 +319,7 @@ wrap_padlock_hmac_fast(gnutls_mac_algorithm_t algo,
 				       pad, text_size + SHA1_DATA_SIZE,
 				       &pad2[SHA1_DATA_SIZE]);
 
+		zeroize_temp_key(pad, text_size + SHA1_DATA_SIZE);
 		gnutls_free(pad);
 
 		memset(pad2, OPAD, SHA1_DATA_SIZE);
@@ -325,6 +329,8 @@ wrap_padlock_hmac_fast(gnutls_mac_algorithm_t algo,
 				       pad2, digest_size + SHA1_DATA_SIZE,
 				       digest);
 
+		zeroize_temp_key(pad2, sizeof(pad2));
+		zeroize_temp_key(hkey, sizeof(hkey));
 	} else {
 		struct padlock_hmac_ctx ctx;
 		int ret;
@@ -339,7 +345,6 @@ wrap_padlock_hmac_fast(gnutls_mac_algorithm_t algo,
 		wrap_padlock_hmac_update(&ctx, text, text_size);
 
 		wrap_padlock_hmac_output(&ctx, digest, ctx.length);
-		wrap_padlock_hmac_deinit(&ctx);
 
 		zeroize_temp_key(&ctx, sizeof(ctx));
 	}
@@ -347,7 +352,7 @@ wrap_padlock_hmac_fast(gnutls_mac_algorithm_t algo,
 	return 0;
 }
 
-const gnutls_crypto_mac_st _gnutls_hmac_sha_padlock = {
+const gnutls_crypto_mac_st _gnutls_hmac_sha_padlock_oneshot = {
 	.init = NULL,
 	.setkey = NULL,
 	.setnonce = NULL,
@@ -357,7 +362,7 @@ const gnutls_crypto_mac_st _gnutls_hmac_sha_padlock = {
 	.fast = wrap_padlock_hmac_fast
 };
 
-const gnutls_crypto_mac_st _gnutls_hmac_sha_padlock_nano = {
+const gnutls_crypto_mac_st _gnutls_hmac_sha_padlock = {
 	.init = wrap_padlock_hmac_init,
 	.setkey = wrap_padlock_hmac_setkey,
 	.setnonce = NULL,

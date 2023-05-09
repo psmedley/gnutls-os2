@@ -87,15 +87,6 @@ void _gnutls_buffer_clear(gnutls_buffer_st * str)
 
 #define MIN_CHUNK 1024
 
-static void align_allocd_with_data(gnutls_buffer_st * dest)
-{
-	assert(dest->allocd != NULL);
-	assert(dest->data != NULL);
-	if (dest->length)
-		memmove(dest->allocd, dest->data, dest->length);
-	dest->data = dest->allocd;
-}
-
 /**
  * gnutls_buffer_append_data:
  * @dest: the buffer to append to
@@ -113,7 +104,7 @@ gnutls_buffer_append_data(gnutls_buffer_t dest, const void *data,
 			   size_t data_size)
 {
 	size_t const tot_len = data_size + dest->length;
-	size_t const unused = MEMSUB(dest->data, dest->allocd);
+	int ret;
 
 	if (unlikely(dest->data != NULL && dest->allocd == NULL))
 		return gnutls_assert_val(GNUTLS_E_INVALID_REQUEST);
@@ -126,25 +117,9 @@ gnutls_buffer_append_data(gnutls_buffer_t dest, const void *data,
 		return gnutls_assert_val(GNUTLS_E_MEMORY_ERROR);
 	}
 
-	if (dest->max_length >= tot_len) {
-
-		if (dest->max_length - unused <= tot_len) {
-			align_allocd_with_data(dest);
-		}
-	} else {
-		size_t const new_len =
-		    MAX(data_size, MIN_CHUNK) + MAX(dest->max_length,
-						    MIN_CHUNK);
-
-		dest->allocd = gnutls_realloc_fast(dest->allocd, new_len);
-		if (dest->allocd == NULL) {
-			gnutls_assert();
-			return GNUTLS_E_MEMORY_ERROR;
-		}
-		dest->max_length = new_len;
-		dest->data = dest->allocd + unused;
-
-		align_allocd_with_data(dest);
+	ret = _gnutls_buffer_resize(dest, tot_len);
+	if (ret < 0) {
+		return ret;
 	}
 	assert(dest->data != NULL);
 
@@ -152,6 +127,45 @@ gnutls_buffer_append_data(gnutls_buffer_t dest, const void *data,
 	dest->length = tot_len;
 
 	return 0;
+}
+
+#ifdef AGGRESSIVE_REALLOC
+
+/* Use a simpler logic for reallocation; i.e., always call
+ * gnutls_realloc_fast() and do not reclaim the no-longer-used
+ * area which has been removed from the beginning of buffer
+ * with _gnutls_buffer_pop_datum().  This helps hit more
+ * issues when running under valgrind.
+ */
+int _gnutls_buffer_resize(gnutls_buffer_st * dest, size_t new_size)
+{
+	size_t unused;
+
+	if (unlikely(dest->data != NULL && dest->allocd == NULL))
+		return gnutls_assert_val(GNUTLS_E_INVALID_REQUEST);
+
+	unused = MEMSUB(dest->data, dest->allocd);
+	dest->allocd =
+	    gnutls_realloc_fast(dest->allocd, new_size + unused);
+	if (dest->allocd == NULL) {
+		gnutls_assert();
+		return GNUTLS_E_MEMORY_ERROR;
+	}
+	dest->max_length = new_size + unused;
+	dest->data = dest->allocd + unused;
+
+	return 0;
+}
+
+#else
+
+static void align_allocd_with_data(gnutls_buffer_st * dest)
+{
+	assert(dest->allocd != NULL);
+	assert(dest->data != NULL);
+	if (dest->length)
+		memmove(dest->allocd, dest->data, dest->length);
+	dest->data = dest->allocd;
 }
 
 int _gnutls_buffer_resize(gnutls_buffer_st * dest, size_t new_size)
@@ -186,6 +200,8 @@ int _gnutls_buffer_resize(gnutls_buffer_st * dest, size_t new_size)
 		return 0;
 	}
 }
+
+#endif
 
 /* Appends the provided string. The null termination byte is appended
  * but not included in length.
@@ -765,34 +781,6 @@ _gnutls_buffer_append_prefix(gnutls_buffer_st * buf, int pfx_size,
 	return _gnutls_buffer_append_data(buf, ss, pfx_size);
 }
 
-/* Reads an uint32 number from the buffer. If check is non zero it will also check whether
- * the number read, is less than the data in the buffer
- */
-int
-_gnutls_buffer_pop_prefix32(gnutls_buffer_st * buf, size_t * data_size,
-			    int check)
-{
-	size_t size;
-
-	if (buf->length < 4) {
-		gnutls_assert();
-		return GNUTLS_E_PARSING_ERROR;
-	}
-
-	size = _gnutls_read_uint32(buf->data);
-	if (check && size > buf->length - 4) {
-		gnutls_assert();
-		return GNUTLS_E_PARSING_ERROR;
-	}
-
-	buf->data += 4;
-	buf->length -= 4;
-
-	*data_size = size;
-
-	return 0;
-}
-
 int _gnutls_buffer_pop_prefix8(gnutls_buffer_st *buf, uint8_t *data, int check)
 {
 	if (buf->length < 1) {
@@ -809,6 +797,31 @@ int _gnutls_buffer_pop_prefix8(gnutls_buffer_st *buf, uint8_t *data, int check)
 
 	buf->data++;
 	buf->length--;
+
+	return 0;
+}
+
+int
+_gnutls_buffer_pop_prefix16(gnutls_buffer_st * buf, size_t * data_size,
+			    int check)
+{
+	size_t size;
+
+	if (buf->length < 2) {
+		gnutls_assert();
+		return GNUTLS_E_PARSING_ERROR;
+	}
+
+	size = _gnutls_read_uint16(buf->data);
+	if (check && size > buf->length - 2) {
+		gnutls_assert();
+		return GNUTLS_E_PARSING_ERROR;
+	}
+
+	buf->data += 2;
+	buf->length -= 2;
+
+	*data_size = size;
 
 	return 0;
 }
@@ -838,6 +851,34 @@ _gnutls_buffer_pop_prefix24(gnutls_buffer_st * buf, size_t * data_size,
 	return 0;
 }
 
+/* Reads an uint32 number from the buffer. If check is non zero it will also check whether
+ * the number read, is less than the data in the buffer
+ */
+int
+_gnutls_buffer_pop_prefix32(gnutls_buffer_st * buf, size_t * data_size,
+			    int check)
+{
+	size_t size;
+
+	if (buf->length < 4) {
+		gnutls_assert();
+		return GNUTLS_E_PARSING_ERROR;
+	}
+
+	size = _gnutls_read_uint32(buf->data);
+	if (check && size > buf->length - 4) {
+		gnutls_assert();
+		return GNUTLS_E_PARSING_ERROR;
+	}
+
+	buf->data += 4;
+	buf->length -= 4;
+
+	*data_size = size;
+
+	return 0;
+}
+
 int
 _gnutls_buffer_pop_datum_prefix32(gnutls_buffer_st * buf,
 				  gnutls_datum_t * data)
@@ -846,6 +887,34 @@ _gnutls_buffer_pop_datum_prefix32(gnutls_buffer_st * buf,
 	int ret;
 
 	ret = _gnutls_buffer_pop_prefix32(buf, &size, 1);
+	if (ret < 0) {
+		gnutls_assert();
+		return ret;
+	}
+
+	if (size > 0) {
+		size_t osize = size;
+		_gnutls_buffer_pop_datum(buf, data, size);
+		if (osize != data->size) {
+			gnutls_assert();
+			return GNUTLS_E_PARSING_ERROR;
+		}
+	} else {
+		data->size = 0;
+		data->data = NULL;
+	}
+
+	return 0;
+}
+
+int
+_gnutls_buffer_pop_datum_prefix24(gnutls_buffer_st * buf,
+				  gnutls_datum_t * data)
+{
+	size_t size;
+	int ret;
+
+	ret = _gnutls_buffer_pop_prefix24(buf, &size, 1);
 	if (ret < 0) {
 		gnutls_assert();
 		return ret;

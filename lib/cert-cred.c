@@ -43,6 +43,7 @@
 #include "x509/common.h"
 #include "dh.h"
 #include "cert-cred.h"
+#include "intprops.h"
 
 
 /*
@@ -55,15 +56,19 @@ _gnutls_certificate_credential_append_keypair(gnutls_certificate_credentials_t r
 				       gnutls_pcert_st * crt,
 				       int nr)
 {
-	res->sorted_cert_idx = gnutls_realloc_fast(res->sorted_cert_idx,
-						(1 + res->ncerts) *
-						sizeof(unsigned int));
+	if (unlikely(INT_ADD_OVERFLOW(res->ncerts, 1))) {
+		return gnutls_assert_val(GNUTLS_E_MEMORY_ERROR);
+	}
+
+	res->sorted_cert_idx = _gnutls_reallocarray_fast(res->sorted_cert_idx,
+							 res->ncerts + 1,
+							 sizeof(unsigned int));
 	if (res->sorted_cert_idx == NULL)
 		return gnutls_assert_val(GNUTLS_E_MEMORY_ERROR);
 
-	res->certs = gnutls_realloc_fast(res->certs,
-					 (1 + res->ncerts) *
-					 sizeof(certs_st));
+	res->certs = _gnutls_reallocarray_fast(res->certs,
+					       res->ncerts + 1,
+					       sizeof(certs_st));
 	if (res->certs == NULL)
 		return gnutls_assert_val(GNUTLS_E_MEMORY_ERROR);
 
@@ -204,7 +209,8 @@ gnutls_certificate_set_key(gnutls_certificate_credentials_t res,
 		gnutls_privkey_set_pin_function(key, res->pin.cb,
 						res->pin.data);
 
-	new_pcert_list = gnutls_malloc(sizeof(gnutls_pcert_st) * pcert_list_size);
+	new_pcert_list = _gnutls_reallocarray(NULL, pcert_list_size,
+					      sizeof(gnutls_pcert_st));
 	if (new_pcert_list == NULL) {
 		return gnutls_assert_val(GNUTLS_E_MEMORY_ERROR);
 	}
@@ -451,7 +457,8 @@ static gnutls_pcert_st *alloc_and_load_x509_certs(gnutls_x509_crt_t *
 	if (certs == NULL)
 		return NULL;
 
-	local_certs = gnutls_malloc(sizeof(gnutls_pcert_st) * ncerts);
+	local_certs = _gnutls_reallocarray(NULL, ncerts,
+					   sizeof(gnutls_pcert_st));
 	if (local_certs == NULL) {
 		gnutls_assert();
 		return NULL;
@@ -809,7 +816,7 @@ void gnutls_certificate_set_retrieve_function2
  * gnutls_session_t,
  * const struct gnutls_cert_retr_st *info,
  * gnutls_pcert_st **certs,
- * unsigned int *pcert_length,
+ * unsigned int *certs_length,
  * gnutls_ocsp_data_st **ocsp,
  * unsigned int *ocsp_length,
  * gnutls_privkey_t *privkey,
@@ -823,13 +830,13 @@ void gnutls_certificate_set_retrieve_function2
  * @pk_algos contains a list with server's acceptable public key algorithms.
  * The certificate returned should support the server's given algorithms.
  *
- * The callback should fill-in the following values.
+ * The callback should fill-in the following values:
  *
- * @pcert should contain an allocated list of certificates and public keys.
- * @pcert_length is the size of the previous list.
+ * @certs should contain an allocated list of certificates and public keys.
+ * @certs_length is the size of the previous list.
  * @ocsp should contain an allocated list of OCSP responses.
  * @ocsp_length is the size of the previous list.
- * @pkey is the private key.
+ * @privkey is the private key.
  *
  * If flags in the callback are set to %GNUTLS_CERT_RETR_DEINIT_ALL then
  * all provided values must be allocated using gnutls_malloc(), and will
@@ -837,10 +844,17 @@ void gnutls_certificate_set_retrieve_function2
  *
  * The callback function should set the certificate and OCSP response
  * list to be sent, and return 0 on success. If no certificates are available,
- * the @pcert_length and @ocsp_length should be set to zero. The return
+ * the @certs_length and @ocsp_length should be set to zero. The return
  * value (-1) indicates error and the handshake will be terminated. If both
  * certificates are set in the credentials and a callback is available, the
  * callback takes predence.
+ *
+ * Raw public-keys:
+ * In case raw public-keys are negotiated as certificate type, certificates
+ * that would normally hold the public-key material are not available. In that case,
+ * @certs contains an allocated list with only the public key. Since there is no
+ * certificate, there is also no certificate status. Therefore, OCSP information
+ * should not be set.
  *
  * Since: 3.6.3
  **/
@@ -880,6 +894,111 @@ void
      gnutls_certificate_verify_function * func)
 {
 	cred->verify_callback = func;
+}
+
+/**
+ * gnutls_x509_trust_list_set_getissuer_function:
+ * @tlist: is a #gnutls_x509_trust_list_t type.
+ * @func: is the callback function
+ *
+ * This function sets a callback to be called when the peer's certificate
+ * chain is incomplete due a missing intermediate certificate. The callback
+ * may provide the missing certificate for use during verification.
+ *
+ * The callback's function prototype is defined in gnutls/x509.h as:
+ *
+ *   int (*callback)(gnutls_x509_trust_list_t list,
+ *                   const gnutls_x509_crt_t cert,
+ *                   gnutls_x509_crt_t **issuers,
+ *                   unsigned int *issuers_size);
+ *
+ * If the callback function is provided then gnutls will call it during the
+ * certificate verification procedure. The callback may wish to use
+ * gnutls_x509_crt_get_authority_info_access() to get a URI from which
+ * to attempt to download the missing issuer certificate, if available.
+ *
+ * On a successful call, the callback shall allocate the 'issuers' array with
+ * gnutls_x509_crt_list_import2(). The ownership of both the array and the
+ * elements is transferred to the caller and thus the application does not need
+ * to maintain the memory after the call.
+ *
+ * The callback function should return 0 if the missing issuer certificate
+ * for 'crt' was properly populated and added to the 'issuers', or non-zero
+ * to continue the certificate list verification but with issuer as %NULL.
+ *
+ * Since: 3.7.0
+ **/
+void gnutls_x509_trust_list_set_getissuer_function(gnutls_x509_trust_list_t tlist,
+		gnutls_x509_trust_list_getissuer_function * func)
+{
+	tlist->issuer_callback = func;
+}
+
+/**
+ * gnutls_x509_trust_list_set_ptr:
+ * @tlist: is a #gnutls_x509_trust_list_t type.
+ * @ptr: is the user pointer
+ *
+ * This function will set (associate) the user given pointer @ptr to
+ * the tlist structure. This pointer can be accessed with
+ * gnutls_x509_trust_list_get_ptr(). Useful in the callback function
+ * gnutls_x509_trust_list_set_getissuer_function.
+ *
+ * Since: 3.7.0
+ **/
+void gnutls_x509_trust_list_set_ptr(gnutls_x509_trust_list_t tlist, void *ptr)
+{
+	tlist->usr_ptr = ptr;
+}
+
+/**
+ * gnutls_x509_trust_list_get_ptr:
+ * @tlist: is a #gnutls_x509_trust_list_t type.
+ *
+ * Get user pointer for tlist. Useful in callback function
+ * gnutls_x509_trust_list_set_getissuer_function.
+ * This is the pointer set with gnutls_x509_trust_list_set_ptr().
+ *
+ * Returns: the user given pointer from the tlist structure, or
+ *   %NULL if it was never set.
+ *
+ * Since: 3.7.0
+ **/
+void *gnutls_x509_trust_list_get_ptr(gnutls_x509_trust_list_t tlist)
+{
+	return tlist->usr_ptr;
+}
+
+/**
+ * gnutls_session_set_verify_output_function:
+ * @session: is a #gnutls_x509_trust_list_t type.
+ * @func: is the callback function
+ *
+ * This function sets a callback to be called when the peer's certificate
+ * chain has to be verified and full path to the trusted root has to be
+ * printed.
+ *
+ * The callback's function prototype is defined in `x509.h':
+ * int (*callback)(
+ * gnutls_x509_crt_t cert,
+ * gnutls_x509_crt_t issuer,
+ * gnutls_x509_crl_t crl,
+ * unsigned int verification_output);
+ *
+ * If the callback function is provided then gnutls will call it, in the
+ * certificate verification procedure.
+ * To verify the certificate chain and print its path uptp the trusted root,
+ * functions such as gnutls_certificate_verify_peers(),
+ * gnutls_x509_trust_list_verify_crt(), and gnutls_x509_trust_list_verify_crt2()
+ * can be used. The callback is set in _gnutls_verify_crt_status() and
+ * _gnutls_pkcs11_verify_crt_status().
+ *
+ * Since: 3.7.0
+ **/
+void gnutls_session_set_verify_output_function(gnutls_session_t session,
+		gnutls_verify_output_function * func)
+{
+	session->internals.cert_output_callback = func;
 }
 
 #define TEST_TEXT "test text"

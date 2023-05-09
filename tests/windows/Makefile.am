@@ -40,7 +40,7 @@ LDADD = $(top_builddir)/tests/libutils.la \
 ctests =
 
 if WINDOWS
-lib_LTLIBRARIES = ncrypt.la crypt32.la
+check_LTLIBRARIES = ncrypt.la crypt32.la
 
 ncrypt_la_SOURCES = ncrypt.c
 crypt32_la_SOURCES = crypt32.c
@@ -73,4 +73,5 @@ TESTS_ENVIRONMENT =						\
 	EXEEXT=$(EXEEXT)			\
 	GNUTLS_SYSTEM_PRIORITY_FILE=$(abs_top_srcdir)/tests/system.prio \
 	top_builddir="$(top_builddir)"		\
+	abs_top_builddir="$(abs_top_builddir)"	\
 	srcdir="$(srcdir)"

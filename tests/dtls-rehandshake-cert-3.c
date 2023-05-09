@@ -135,7 +135,7 @@ static void client(int fd, const char *prio)
 
 	gnutls_transport_set_int(session, fd);
 	gnutls_transport_set_push_function(session, push);
-	gnutls_dtls_set_timeouts(session, 2000, 30 * 1000);
+	gnutls_dtls_set_timeouts(session, get_dtls_retransmit_timeout(), get_timeout());
 
 	/* Perform the TLS handshake
 	 */
@@ -212,7 +212,7 @@ pid_t child;
 static void terminate(void)
 {
 	int status;
-
+	assert(child);
 	kill(child, SIGTERM);
 	wait(&status);
 	exit(1);

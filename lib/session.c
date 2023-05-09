@@ -100,7 +100,7 @@ gnutls_session_get_data(gnutls_session_t session,
  * is received by the client. To ensure that such a ticket has been received use
  * gnutls_session_get_flags() and check for flag %GNUTLS_SFLAGS_SESSION_TICKET;
  * if this flag is not set, this function will wait for a new ticket within
- * an estimated rountrip, and if not received will return dummy data which
+ * an estimated roundtrip, and if not received will return dummy data which
  * cannot lead to resumption.
  *
  * To get notified when new tickets are received by the server
@@ -166,7 +166,7 @@ gnutls_session_get_data2(gnutls_session_t session, gnutls_datum_t *data)
 		}
 	}
 
-	if (session->internals.resumable == RESUME_FALSE)
+	if (!session->internals.resumable)
 		return GNUTLS_E_INVALID_SESSION;
 
 	ret = _gnutls_session_pack(session, data);
@@ -385,7 +385,7 @@ char *gnutls_session_get_desc(gnutls_session_t session)
 	if (group_name == NULL && _gnutls_kx_is_dhe(kx)) {
 		dh_bits = gnutls_dh_get_prime_bits(session);
 		if (dh_bits > 0)
-			snprintf(_group_name, sizeof(_group_name), "CUSTOM%u", dh_bits);
+			snprintf(_group_name, sizeof(_group_name), "CUSTOM%d", dh_bits);
 		else
 			snprintf(_group_name, sizeof(_group_name), "CUSTOM");
 		group_name = _group_name;

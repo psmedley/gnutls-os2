@@ -100,7 +100,7 @@ static int client_handshake(gnutls_session_t session, gnutls_datum_t *session_da
 static void client(int fd, int *resume, unsigned rounds, const char *prio)
 {
 	gnutls_session_t session;
-	gnutls_datum_t session_data;
+	gnutls_datum_t session_data = { NULL, 0 };
 	gnutls_certificate_credentials_t clientx509cred = NULL;
 
 	for (unsigned i = 0; i < rounds; i++) {
@@ -113,7 +113,7 @@ static void client(int fd, int *resume, unsigned rounds, const char *prio)
 				       clientx509cred);
 
 		gnutls_transport_set_int(session, fd);
-		gnutls_handshake_set_timeout(session, 20 * 1000);
+		gnutls_handshake_set_timeout(session, get_timeout());
 
 		/* Perform TLS handshake and obtain session ticket */
 		if (client_handshake(session, &session_data,
@@ -171,7 +171,7 @@ static void server(int fd, unsigned rounds, const char *prio)
 		}
 
 		gnutls_transport_set_int(session, fd);
-		gnutls_handshake_set_timeout(session, 20 * 1000);
+		gnutls_handshake_set_timeout(session, get_timeout());
 
 		virt_sec_sleep(TICKET_ROTATION_PERIOD-1);
 
@@ -196,8 +196,8 @@ static void server(int fd, unsigned rounds, const char *prio)
 		serverx509cred = NULL;
 	}
 
-	if (num_stek_rotations != 2)
-		fail("STEK should be rotated exactly twice (%d)!\n", num_stek_rotations);
+	if (num_stek_rotations != 3)
+		fail("STEK should be rotated exactly three times (%d)!\n", num_stek_rotations);
 
 	if (serverx509cred)
 		gnutls_certificate_free_credentials(serverx509cred);
@@ -227,11 +227,13 @@ static void run(const char *name, const char *prio, int resume[], int rounds)
 
 	if (child) {
 		/* We are the parent */
+		close(sockets[1]);
 		server(sockets[0], rounds, prio);
 		waitpid(child, &status, 0);
 		check_wait_status(status);
 	} else {
 		/* We are the child */
+		close(sockets[0]);
 		client(sockets[1], resume, rounds, prio);
 		exit(0);
 	}

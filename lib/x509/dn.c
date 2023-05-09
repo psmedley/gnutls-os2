@@ -33,7 +33,7 @@
  * Name (you need a parser just to read a name in the X.509 protocols!!!)
  */
 
-static int append_elements(ASN1_TYPE asn1_struct, const char *asn1_rdn_name, gnutls_buffer_st *str, int k1, unsigned last)
+static int append_elements(asn1_node asn1_struct, const char *asn1_rdn_name, gnutls_buffer_st *str, int k1, unsigned last)
 {
 	int k2, result, max_k2;
 	int len;
@@ -49,10 +49,10 @@ static int append_elements(ASN1_TYPE asn1_struct, const char *asn1_rdn_name, gnu
 	/* create a string like "tbsCertList.issuer.rdnSequence.?1"
 	 */
 	if (asn1_rdn_name[0] != 0)
-		snprintf(tmpbuffer1, sizeof(tmpbuffer1), "%s.?%u",
+		snprintf(tmpbuffer1, sizeof(tmpbuffer1), "%s.?%d",
 			 asn1_rdn_name, k1);
 	else
-		snprintf(tmpbuffer1, sizeof(tmpbuffer1), "?%u",
+		snprintf(tmpbuffer1, sizeof(tmpbuffer1), "?%d",
 			 k1);
 
 	len = sizeof(value) - 1;
@@ -80,10 +80,10 @@ static int append_elements(ASN1_TYPE asn1_struct, const char *asn1_rdn_name, gnu
 
 		if (tmpbuffer1[0] != 0)
 			snprintf(tmpbuffer2, sizeof(tmpbuffer2),
-				 "%s.?%u", tmpbuffer1, k2);
+				 "%s.?%d", tmpbuffer1, k2);
 		else
 			snprintf(tmpbuffer2, sizeof(tmpbuffer2),
-				 "?%u", k2);
+				 "?%d", k2);
 
 		/* Try to read the RelativeDistinguishedName attributes.
 		 */
@@ -156,6 +156,20 @@ static int append_elements(ASN1_TYPE asn1_struct, const char *asn1_rdn_name, gnu
 		STR_APPEND(ldap_desc);
 		STR_APPEND("=");
 
+		/* DirectoryString by definition in RFC 5280 cannot be empty.
+		 * If asn_node.value_len = 0 the parser correctly rejects such DirectoryString.
+		 * However, if asn_node.value contains ASN.1 TLV triplet with length = 0,
+		 * such DirectoryString is not rejected by the parser as the node itself is not empty.
+		 * Explicitly reject DirectoryString in such case.
+		 */
+		const char *asn_desc = _gnutls_oid_get_asn_desc(oid);
+		if (asn_desc && !strcmp(asn_desc, "PKIX1.DirectoryString") && tvd.data[1] == 0) {
+			gnutls_assert();
+			result = GNUTLS_E_ASN1_VALUE_NOT_VALID;
+			_gnutls_debug_log("Empty DirectoryString\n");
+			goto cleanup;
+		}
+
 		result =
 		    _gnutls_x509_dn_to_string(oid, tvd.data,
 					      tvd.size, &td);
@@ -197,7 +211,7 @@ static int append_elements(ASN1_TYPE asn1_struct, const char *asn1_rdn_name, gnu
 }
 
 int
-_gnutls_x509_get_dn(ASN1_TYPE asn1_struct,
+_gnutls_x509_get_dn(asn1_node asn1_struct,
 		    const char *asn1_rdn_name, gnutls_datum_t * dn,
 		    unsigned flags)
 {
@@ -258,7 +272,7 @@ _gnutls_x509_get_dn(ASN1_TYPE asn1_struct,
  * That is to point in the rndSequence.
  */
 int
-_gnutls_x509_parse_dn(ASN1_TYPE asn1_struct,
+_gnutls_x509_parse_dn(asn1_node asn1_struct,
 		      const char *asn1_rdn_name, char *buf,
 		      size_t * buf_size, unsigned flags)
 {
@@ -314,7 +328,7 @@ _gnutls_x509_parse_dn(ASN1_TYPE asn1_struct,
  * OID found, 1 the second etc.
  */
 int
-_gnutls_x509_parse_dn_oid(ASN1_TYPE asn1_struct,
+_gnutls_x509_parse_dn_oid(asn1_node asn1_struct,
 			  const char *asn1_rdn_name,
 			  const char *given_oid, int indx,
 			  unsigned int raw_flag, gnutls_datum_t * out)
@@ -336,10 +350,10 @@ _gnutls_x509_parse_dn_oid(ASN1_TYPE asn1_struct,
 		/* create a string like "tbsCertList.issuer.rdnSequence.?1"
 		 */
 		if (asn1_rdn_name[0] != 0)
-			snprintf(tmpbuffer1, sizeof(tmpbuffer1), "%s.?%u",
+			snprintf(tmpbuffer1, sizeof(tmpbuffer1), "%s.?%d",
 				 asn1_rdn_name, k1);
 		else
-			snprintf(tmpbuffer1, sizeof(tmpbuffer1), "?%u",
+			snprintf(tmpbuffer1, sizeof(tmpbuffer1), "?%d",
 				 k1);
 
 		len = sizeof(value) - 1;
@@ -365,10 +379,10 @@ _gnutls_x509_parse_dn_oid(ASN1_TYPE asn1_struct,
 
 			if (tmpbuffer1[0] != 0)
 				snprintf(tmpbuffer2, sizeof(tmpbuffer2),
-					 "%s.?%u", tmpbuffer1, k2);
+					 "%s.?%d", tmpbuffer1, k2);
 			else
 				snprintf(tmpbuffer2, sizeof(tmpbuffer2),
-					 "?%u", k2);
+					 "?%d", k2);
 
 			/* Try to read the RelativeDistinguishedName attributes.
 			 */
@@ -476,7 +490,7 @@ _gnutls_x509_parse_dn_oid(ASN1_TYPE asn1_struct,
  * OID found, 1 the second etc.
  */
 int
-_gnutls_x509_get_dn_oid(ASN1_TYPE asn1_struct,
+_gnutls_x509_get_dn_oid(asn1_node asn1_struct,
 			const char *asn1_rdn_name,
 			int indx, void *_oid, size_t * sizeof_oid)
 {
@@ -496,10 +510,10 @@ _gnutls_x509_get_dn_oid(ASN1_TYPE asn1_struct,
 		/* create a string like "tbsCertList.issuer.rdnSequence.?1"
 		 */
 		if (asn1_rdn_name[0] != 0)
-			snprintf(tmpbuffer1, sizeof(tmpbuffer1), "%s.?%u",
+			snprintf(tmpbuffer1, sizeof(tmpbuffer1), "%s.?%d",
 				 asn1_rdn_name, k1);
 		else
-			snprintf(tmpbuffer1, sizeof(tmpbuffer1), "?%u",
+			snprintf(tmpbuffer1, sizeof(tmpbuffer1), "?%d",
 				 k1);
 
 		len = sizeof(value) - 1;
@@ -525,10 +539,10 @@ _gnutls_x509_get_dn_oid(ASN1_TYPE asn1_struct,
 
 			if (tmpbuffer1[0] != 0)
 				snprintf(tmpbuffer2, sizeof(tmpbuffer2),
-					 "%s.?%u", tmpbuffer1, k2);
+					 "%s.?%d", tmpbuffer1, k2);
 			else
 				snprintf(tmpbuffer2, sizeof(tmpbuffer2),
-					 "?%u", k2);
+					 "?%d", k2);
 
 			/* Try to read the RelativeDistinguishedName attributes.
 			 */
@@ -603,7 +617,7 @@ _gnutls_x509_get_dn_oid(ASN1_TYPE asn1_struct,
  */
 static int
 _gnutls_x509_write_attribute(const char *given_oid,
-			     ASN1_TYPE asn1_struct, const char *where,
+			     asn1_node asn1_struct, const char *where,
 			     const void *_data, int sizeof_data)
 {
 	char tmp[128];
@@ -645,7 +659,7 @@ _gnutls_x509_write_attribute(const char *given_oid,
  * The output is allocated and stored in value.
  */
 int
-_gnutls_x509_decode_and_read_attribute(ASN1_TYPE asn1_struct,
+_gnutls_x509_decode_and_read_attribute(asn1_node asn1_struct,
 				       const char *where, char *oid,
 				       int oid_size,
 				       gnutls_datum_t * value, int multi,
@@ -701,7 +715,7 @@ _gnutls_x509_decode_and_read_attribute(ASN1_TYPE asn1_struct,
  *
  */
 int
-_gnutls_x509_set_dn_oid(ASN1_TYPE asn1_struct,
+_gnutls_x509_set_dn_oid(asn1_node asn1_struct,
 			const char *asn1_name, const char *given_oid,
 			int raw_flag, const char *name, int sizeof_name)
 {
@@ -888,7 +902,7 @@ gnutls_x509_rdn_get_by_oid(const gnutls_datum_t * idn, const char *oid,
 			   void *buf, size_t * buf_size)
 {
 	int result;
-	ASN1_TYPE dn = ASN1_TYPE_EMPTY;
+	asn1_node dn = NULL;
 	gnutls_datum_t td;
 
 	if (buf_size == 0) {
@@ -943,7 +957,7 @@ gnutls_x509_rdn_get_oid(const gnutls_datum_t * idn,
 			unsigned indx, void *buf, size_t * buf_size)
 {
 	int result;
-	ASN1_TYPE dn = ASN1_TYPE_EMPTY;
+	asn1_node dn = NULL;
 
 	if (buf_size == 0) {
 		return GNUTLS_E_INVALID_REQUEST;
@@ -982,13 +996,56 @@ int
 _gnutls_x509_compare_raw_dn(const gnutls_datum_t * dn1,
 			    const gnutls_datum_t * dn2)
 {
+	int ret;
+	gnutls_datum_t str1, str2;
 
-	if (dn1->size != dn2->size) {
-		return 0;
+	/* Simple case of completely identical? */
+
+	if (dn1->size == dn2->size) {
+		if (memcmp(dn1->data, dn2->data, dn2->size) == 0) {
+			return 1;
+		}
 	}
-	if (memcmp(dn1->data, dn2->data, dn2->size) != 0) {
+
+	/* RFC5280 (https://tools.ietf.org/html/rfc5280#section-7.1)
+	 * requires that the LDAP StringPrep profile and caseIgnoreMatch
+	 * must be used for this comparison. We do not use that but
+	 * instead we do a simpler comparison that ignores the tags used
+	 * such as `UTF8String` and `PrintableString`. */
+
+	if ((dn1->size == 0) || (dn2->size == 0)) {
 		gnutls_assert();
 		return 0;
 	}
-	return 1;		/* they match */
+
+	ret = gnutls_x509_rdn_get2(dn1, &str1, 0);
+	if (ret < 0) {
+		gnutls_assert();
+		return 0;
+	}
+
+	ret = gnutls_x509_rdn_get2(dn2, &str2, 0);
+	if (ret < 0) {
+		gnutls_assert();
+		_gnutls_free_datum(&str1);
+		return 0;
+	}
+
+	if (str1.size != str2.size) {
+		ret = 0;
+		goto cleanup;
+	}
+	if (memcmp(str1.data, str2.data, str2.size) != 0) {
+		gnutls_assert();
+		ret = 0;
+		goto cleanup;
+	}
+
+	ret = 1;		/* they match */
+
+cleanup:
+	_gnutls_free_datum(&str1);
+	_gnutls_free_datum(&str2);
+
+	return ret;
 }

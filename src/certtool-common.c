@@ -40,7 +40,7 @@
 #include <fcntl.h>
 #include <common.h>
 #include "certtool-common.h"
-#include "certtool-args.h"
+#include "certtool-options.h"
 #include "certtool-cfg.h"
 #include "common.h"
 #include <minmax.h>
@@ -270,7 +270,7 @@ gnutls_privkey_t load_private_key(int mand, common_info_st * info)
 	if (gnutls_url_is_supported(info->privkey) != 0)
 		return _load_url_privkey(info->privkey);
 
-	dat.data = (void *) read_binary_file(info->privkey, &size);
+	dat.data = (void *) read_file(info->privkey, RF_BINARY, &size);
 	dat.size = size;
 
 	if (!dat.data) {
@@ -313,7 +313,7 @@ load_x509_private_key(int mand, common_info_st * info)
 		app_exit(1);
 	}
 
-	dat.data = (void *) read_binary_file(info->privkey, &size);
+	dat.data = (void *) read_file(info->privkey, RF_BINARY, &size);
 	dat.size = size;
 
 	if (!dat.data) {
@@ -389,7 +389,7 @@ gnutls_x509_crt_t load_cert(int mand, common_info_st * info)
 gnutls_x509_crt_t *load_cert_list(int mand, size_t * crt_size,
 				  common_info_st * info)
 {
-	FILE *fd;
+	FILE *fp;
 	static gnutls_x509_crt_t *crt;
 	int ret;
 	gnutls_datum_t dat;
@@ -409,18 +409,18 @@ gnutls_x509_crt_t *load_cert_list(int mand, size_t * crt_size,
 			return NULL;
 	}
 
-	fd = fopen(info->cert, "r");
-	if (fd == NULL) {
+	fp = fopen(info->cert, "r");
+	if (fp == NULL) {
 		fprintf(stderr, "Could not open %s\n", info->cert);
 		app_exit(1);
 	}
 
-	fix_lbuffer(file_size(fd));
+	fix_lbuffer(file_size(fp));
 
-	size = fread(lbuffer, 1, lbuffer_size - 1, fd);
+	size = fread(lbuffer, 1, lbuffer_size - 1, fp);
 	lbuffer[size] = 0;
 
-	fclose(fd);
+	fclose(fp);
 
 	dat.data = (void *) lbuffer;
 	dat.size = size;
@@ -448,7 +448,7 @@ gnutls_x509_crt_t *load_cert_list(int mand, size_t * crt_size,
 gnutls_x509_crl_t *load_crl_list(int mand, size_t * crl_size,
 				  common_info_st * info)
 {
-	FILE *fd;
+	FILE *fp;
 	static gnutls_x509_crl_t *crl;
 	unsigned int crl_max;
 	int ret;
@@ -467,18 +467,18 @@ gnutls_x509_crl_t *load_crl_list(int mand, size_t * crl_size,
 			return NULL;
 	}
 
-	fd = fopen(info->crl, "r");
-	if (fd == NULL) {
+	fp = fopen(info->crl, "r");
+	if (fp == NULL) {
 		fprintf(stderr, "Could not open %s\n", info->crl);
 		app_exit(1);
 	}
 
-	fix_lbuffer(file_size(fd));
+	fix_lbuffer(file_size(fp));
 
-	size = fread(lbuffer, 1, lbuffer_size - 1, fd);
+	size = fread(lbuffer, 1, lbuffer_size - 1, fp);
 	lbuffer[size] = 0;
 
-	fclose(fd);
+	fclose(fp);
 
 	dat.data = (void *) lbuffer;
 	dat.size = size;
@@ -519,7 +519,7 @@ gnutls_x509_crq_t load_request(common_info_st * info)
 		app_exit(1);
 	}
 
-	dat.data = (void *) read_binary_file(info->request, &size);
+	dat.data = (void *) read_file(info->request, RF_BINARY, &size);
 	dat.size = size;
 
 	if (!dat.data) {
@@ -560,7 +560,7 @@ gnutls_privkey_t load_ca_private_key(common_info_st * info)
 	if (gnutls_url_is_supported(info->ca_privkey) != 0)
 		return _load_url_privkey(info->ca_privkey);
 
-	dat.data = (void *) read_binary_file(info->ca_privkey, &size);
+	dat.data = (void *) read_file(info->ca_privkey, RF_BINARY, &size);
 	dat.size = size;
 
 	if (!dat.data) {
@@ -610,7 +610,7 @@ gnutls_x509_crt_t load_ca_cert(unsigned mand, common_info_st * info)
 		return crt;
 	}
 
-	dat.data = (void *) read_binary_file(info->ca, &size);
+	dat.data = (void *) read_file(info->ca, RF_BINARY, &size);
 	dat.size = size;
 
 	if (!dat.data) {
@@ -657,7 +657,7 @@ gnutls_pubkey_t load_pubkey(int mand, common_info_st * info)
 		app_exit(1);
 	}
 
-	dat.data = (void *) read_binary_file(info->pubkey, &size);
+	dat.data = (void *) read_file(info->pubkey, RF_BINARY, &size);
 	dat.size = size;
 
 	if (!dat.data) {
@@ -698,7 +698,7 @@ gnutls_pubkey_t load_public_key_or_import(int mand,
 		app_exit(1);
 	}
 
-	if (!privkey || (ret = gnutls_pubkey_import_privkey(pubkey, privkey, 0, 0)) < 0) {	/* could not get (e.g. on PKCS #11 */
+	if (!privkey || gnutls_pubkey_import_privkey(pubkey, privkey, 0, 0) < 0) {	/* could not get (e.g. on PKCS #11) */
 		gnutls_pubkey_deinit(pubkey);
 		pubkey = load_pubkey(0, info);
 		if (pubkey == NULL && mand) {
@@ -1090,7 +1090,7 @@ void dh_info(FILE * infile, FILE * outfile, common_info_st * ci)
 		app_exit(1);
 	}
 
-	params.data = (void *) fread_file(infile, &size);
+	params.data = (void *) fread_file(infile, 0, &size);
 	params.size = size;
 
 	if (params.data == NULL) {
@@ -1149,11 +1149,7 @@ void dh_info(FILE * infile, FILE * outfile, common_info_st * ci)
 int cipher_to_flags(const char *cipher)
 {
 	if (cipher == NULL) {
-#ifdef ENABLE_FIPS140
 		return GNUTLS_PKCS_USE_PBES2_AES_128;
-#else /* compatibility mode - most implementations don't support PBES2 with AES */
-		return GNUTLS_PKCS_USE_PKCS12_3DES;
-#endif
 	} else if (strcasecmp(cipher, "3des") == 0) {
 		return GNUTLS_PKCS_USE_PBES2_3DES;
 	} else if (strcasecmp(cipher, "3des-pkcs12") == 0) {
@@ -1289,7 +1285,9 @@ static void privkey_info_int(FILE *outfile, common_info_st * cinfo,
 		}
 	} else if (key_type == GNUTLS_PK_ECDSA ||
 		   key_type == GNUTLS_PK_EDDSA_ED25519 ||
-		   key_type == GNUTLS_PK_EDDSA_ED448) {
+		   key_type == GNUTLS_PK_EDDSA_ED448 ||
+		   key_type == GNUTLS_PK_ECDH_X25519 ||
+		   key_type == GNUTLS_PK_ECDH_X448) {
 		gnutls_datum_t y, x, k;
 		gnutls_ecc_curve_t curve;
 
@@ -1645,6 +1643,10 @@ gnutls_pk_algorithm_t figure_key_type(const char *key_type)
 		return GNUTLS_PK_EDDSA_ED25519;
 	else if (strcasecmp(key_type, "ed448") == 0)
 		return GNUTLS_PK_EDDSA_ED448;
+	else if (strcasecmp(key_type, "x25519") == 0)
+		return GNUTLS_PK_ECDH_X25519;
+	else if (strcasecmp(key_type, "x448") == 0)
+		return GNUTLS_PK_ECDH_X448;
 	else if (strcasecmp(key_type, "dsa") == 0)
 		return GNUTLS_PK_DSA;
 	else if (strcasecmp(key_type, "ecdsa") == 0 || strcasecmp(key_type, "ecc") == 0)

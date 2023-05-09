@@ -1,21 +1,23 @@
 /*
  * Copyright (C) 2015 Red Hat, Inc.
  *
+ * Author: Nikos Mavrogiannopoulos
+ *
  * This file is part of GnuTLS.
  *
- * GnuTLS is free software: you can redistribute it and/or modify it
- * under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
+ * The GnuTLS is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public License
+ * as published by the Free Software Foundation; either version 2.1 of
+ * the License, or (at your option) any later version.
  *
- * GnuTLS is distributed in the hope that it will be useful, but
+ * This library is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
+ * Lesser General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see
- * <https://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>
+ *
  */
 
 #include <config.h>
@@ -137,7 +139,7 @@ static krb5_principal_data *name_to_principal(const char *_name)
 int _gnutls_krb5_principal_to_der(const char *name, gnutls_datum_t * der)
 {
 	int ret, result;
-	ASN1_TYPE c2 = ASN1_TYPE_EMPTY;
+	asn1_node c2 = NULL;
 	krb5_principal_data *princ;
 	unsigned i;
 
@@ -206,7 +208,7 @@ int _gnutls_krb5_principal_to_der(const char *name, gnutls_datum_t * der)
 	return ret;
 }
 
-static int principal_to_str(ASN1_TYPE c2, gnutls_buffer_st * str)
+static int principal_to_str(asn1_node c2, gnutls_buffer_st * str)
 {
 	gnutls_datum_t realm = { NULL, 0 };
 	gnutls_datum_t component = { NULL, 0 };
@@ -290,7 +292,7 @@ int _gnutls_krb5_der_to_principal(const gnutls_datum_t * der,
 				  gnutls_datum_t * name)
 {
 	int ret, result;
-	ASN1_TYPE c2 = ASN1_TYPE_EMPTY;
+	asn1_node c2 = NULL;
 	gnutls_buffer_st str;
 
 	_gnutls_buffer_init(&str);

@@ -111,6 +111,7 @@ static ssize_t odd_push(gnutls_transport_ptr_t tr, const void *data, size_t len)
 	}
 
 	stored_messages[current] = malloc(len);
+	assert(stored_messages[current]);
 	memcpy(stored_messages[current], data, len);
 	stored_sizes[current] = len;
 
@@ -195,7 +196,7 @@ static void client(int fd)
 	/* Initialize TLS session
 	 */
 	gnutls_init(&session, GNUTLS_CLIENT | GNUTLS_DATAGRAM);
-	gnutls_dtls_set_timeouts(session, 50 * 1000, 600 * 1000);
+	gnutls_dtls_set_timeouts(session, get_dtls_retransmit_timeout(), get_timeout());
 	gnutls_heartbeat_enable(session, GNUTLS_HB_PEER_ALLOWED_TO_SEND);
 	gnutls_dtls_set_mtu(session, 1500);
 
@@ -247,12 +248,12 @@ static void client(int fd)
 
 			if (recv_msg_seq[current] == -1) {
 				fail("received message sequence differs\n");
-				terminate();
+				exit(1);
 			}
 			if (((uint32_t)recv_msg_seq[current]) != useq) {
 				fail("received message sequence differs (current: %u, got: %u, expected: %u)\n",
 				     (unsigned)current, (unsigned)useq, (unsigned)recv_msg_seq[current]);
-				terminate();
+				exit(1);
 			}
 
 			current++;
@@ -275,7 +276,7 @@ static void client(int fd)
 static void terminate(void)
 {
 	int status;
-
+	assert(child);
 	kill(child, SIGTERM);
 	wait(&status);
 	exit(1);
@@ -298,7 +299,7 @@ static void server(int fd)
 	gnutls_anon_allocate_server_credentials(&anoncred);
 
 	gnutls_init(&session, GNUTLS_SERVER | GNUTLS_DATAGRAM);
-	gnutls_dtls_set_timeouts(session, 50 * 1000, 600 * 1000);
+	gnutls_dtls_set_timeouts(session, get_dtls_retransmit_timeout(), get_timeout());
 	gnutls_transport_set_push_function(session, odd_push);
 	gnutls_heartbeat_enable(session, GNUTLS_HB_PEER_ALLOWED_TO_SEND);
 	gnutls_dtls_set_mtu(session, 1500);

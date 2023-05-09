@@ -106,7 +106,7 @@ int gnutls_certificate_retrieve_function3(
 gnutls_session_t,
 const struct gnutls_cert_retr_st *info,
 gnutls_pcert_st **certs,
-unsigned int *pcert_length,
+unsigned int *certs_length,
 gnutls_ocsp_data_st **ocsp,
 unsigned int *ocsp_length,
 gnutls_privkey_t *privkey,
@@ -120,13 +120,13 @@ meaningful value use the function @code{gnutls_x509_rdn_get()} .
  @code{pk_algos} contains a list with server's acceptable public key algorithms.
 The certificate returned should support the server's given algorithms.
 
-The callback should fill-in the following values.
+The callback should fill-in the following values:
 
- @code{pcert} should contain an allocated list of certificates and public keys.
- @code{pcert_length} is the size of the previous list.
+ @code{certs} should contain an allocated list of certificates and public keys.
+ @code{certs_length} is the size of the previous list.
  @code{ocsp} should contain an allocated list of OCSP responses.
  @code{ocsp_length} is the size of the previous list.
- @code{pkey} is the private key.
+ @code{privkey} is the private key.
 
 If flags in the callback are set to @code{GNUTLS_CERT_RETR_DEINIT_ALL}  then
 all provided values must be allocated using @code{gnutls_malloc()} , and will
@@ -134,10 +134,17 @@ be released by gnutls; otherwise they will not be touched by gnutls.
 
 The callback function should set the certificate and OCSP response
 list to be sent, and return 0 on success. If no certificates are available,
-the  @code{pcert_length} and  @code{ocsp_length} should be set to zero. The return
+the  @code{certs_length} and  @code{ocsp_length} should be set to zero. The return
 value (-1) indicates error and the handshake will be terminated. If both
 certificates are set in the credentials and a callback is available, the
 callback takes predence.
+
+Raw public-keys:
+In case raw public-keys are negotiated as certificate type, certificates
+that would normally hold the public-key material are not available. In that case,
+ @code{certs} contains an allocated list with only the public key. Since there is no
+certificate, there is also no certificate status. Therefore, OCSP information
+should not be set.
 
 @strong{Since:} 3.6.3
 @end deftypefun
@@ -858,7 +865,7 @@ success, or a negative error code on error.
 
 @var{g}: holds the g
 
-@var{y}: holds the y
+@var{y}: holds the y (optional)
 
 @var{x}: holds the x
 
@@ -1173,7 +1180,7 @@ negative error value.
 
 @var{e}: holds the public exponent
 
-@var{d}: holds the private exponent
+@var{d}: holds the private exponent (optional)
 
 @var{p}: holds the first prime (p)
 
@@ -1309,7 +1316,7 @@ This function will import the given private key to the abstract
 @code{gnutls_privkey_t}  type. 
 
 The supported formats are basic unencrypted key, PKCS8, PKCS12, 
-and the openssl format.
+TSS2, and the openssl format.
 
 @strong{Returns:} On success, @code{GNUTLS_E_SUCCESS}  (0) is returned, otherwise a
 negative error value.
@@ -1488,21 +1495,17 @@ negative error value.
 
 @var{signature}: will contain newly allocated signature
 
-This function will sign the given hashed data using a signature algorithm
-supported by the private key. Signature algorithms are always used
-together with a hash functions.  Different hash functions may be
-used for the RSA algorithm, but only SHA-XXX for the DSA keys.
+This function will sign the given hashed data using the specified signature
+algorithm. This function is an enhancement of @code{gnutls_privkey_sign_hash()} ,
+as it allows utilizing a alternative signature algorithm where possible
+(e.g, use an RSA key with RSA-PSS).
 
-You may use @code{gnutls_pubkey_get_preferred_hash_algorithm()}  to determine
-the hash algorithm.
+The flags may be @code{GNUTLS_PRIVKEY_SIGN_FLAG_TLS1_RSA} .
+In that case this function will ignore  @code{hash_algo} and perform a raw PKCS1 signature.
+Note that this flag is supported since 3.6.9.
 
-The flags may be @code{GNUTLS_PRIVKEY_SIGN_FLAG_TLS1_RSA}  or @code{GNUTLS_PRIVKEY_SIGN_FLAG_RSA_PSS} .
-In the former case this function will ignore  @code{hash_algo} and perform a raw PKCS1 signature,
-and in the latter an RSA-PSS signature will be generated. Note that the flag
-@code{GNUTLS_PRIVKEY_SIGN_FLAG_TLS1_RSA}  is supported since 3.6.9.
-
-Note that, not all algorithm support signing already hashed data. When
-signing with Ed25519, @code{gnutls_privkey_sign_data()}  should be used.
+Note also that, not all algorithm support signing already hashed data. When
+signing with Ed25519, @code{gnutls_privkey_sign_data2()}  should be used instead.
 
 @strong{Returns:} On success, @code{GNUTLS_E_SUCCESS}  (0) is returned, otherwise a
 negative error value.

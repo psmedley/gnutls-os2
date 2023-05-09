@@ -56,7 +56,7 @@ _gnutls_x509_write_rsa_pubkey(const gnutls_pk_params_st * params,
 			      gnutls_datum_t * der)
 {
 	int result;
-	ASN1_TYPE spk = ASN1_TYPE_EMPTY;
+	asn1_node spk = NULL;
 
 	der->data = NULL;
 	der->size = 0;
@@ -161,6 +161,35 @@ _gnutls_x509_write_eddsa_pubkey(const gnutls_pk_params_st * params,
 	return 0;
 }
 
+/*
+ * some x509 certificate functions that relate to MPI parameter
+ * setting. This writes a raw public key.
+ *
+ * Allocates the space used to store the data.
+ */
+static int
+_gnutls_x509_write_modern_ecdh_pubkey(const gnutls_pk_params_st * params,
+                                      gnutls_datum_t * raw)
+{
+	int ret;
+
+	raw->data = NULL;
+	raw->size = 0;
+
+	if (params->raw_pub.size == 0)
+		return gnutls_assert_val(GNUTLS_E_INVALID_REQUEST);
+
+	if (params->curve != GNUTLS_ECC_CURVE_X25519 &&
+	    params->curve != GNUTLS_ECC_CURVE_X448)
+		return gnutls_assert_val(GNUTLS_E_ECC_UNSUPPORTED_CURVE);
+
+	ret = _gnutls_set_datum(raw, params->raw_pub.data, params->raw_pub.size);
+	if (ret < 0)
+		return gnutls_assert_val(ret);
+
+	return 0;
+}
+
 int
 _gnutls_x509_write_gost_pubkey(const gnutls_pk_params_st * params,
 			      gnutls_datum_t * der)
@@ -254,6 +283,8 @@ _gnutls_x509_write_pubkey_params(const gnutls_pk_params_st * params,
 		return _gnutls_x509_write_ecc_params(params->curve, der);
 	case GNUTLS_PK_EDDSA_ED25519:
 	case GNUTLS_PK_EDDSA_ED448:
+	case GNUTLS_PK_ECDH_X25519:
+	case GNUTLS_PK_ECDH_X448:
 		der->data = NULL;
 		der->size = 0;
 
@@ -282,6 +313,9 @@ _gnutls_x509_write_pubkey(const gnutls_pk_params_st * params,
 	case GNUTLS_PK_EDDSA_ED25519:
 	case GNUTLS_PK_EDDSA_ED448:
 		return _gnutls_x509_write_eddsa_pubkey(params, der);
+	case GNUTLS_PK_ECDH_X25519:
+	case GNUTLS_PK_ECDH_X448:
+		return _gnutls_x509_write_modern_ecdh_pubkey(params, der);
 	case GNUTLS_PK_GOST_01:
 	case GNUTLS_PK_GOST_12_256:
 	case GNUTLS_PK_GOST_12_512:
@@ -302,7 +336,7 @@ _gnutls_x509_write_dsa_params(const gnutls_pk_params_st * params,
 			      gnutls_datum_t * der)
 {
 	int result;
-	ASN1_TYPE spk = ASN1_TYPE_EMPTY;
+	asn1_node spk = NULL;
 
 	der->data = NULL;
 	der->size = 0;
@@ -362,7 +396,7 @@ _gnutls_x509_write_ecc_params(const gnutls_ecc_curve_t curve,
 			      gnutls_datum_t * der)
 {
 	int result;
-	ASN1_TYPE spk = ASN1_TYPE_EMPTY;
+	asn1_node spk = NULL;
 	const char *oid;
 
 	der->data = NULL;
@@ -413,8 +447,8 @@ _gnutls_x509_write_rsa_pss_params(const gnutls_x509_spki_st *params,
 				  gnutls_datum_t *der)
 {
 	int result;
-	ASN1_TYPE spk = ASN1_TYPE_EMPTY;
-	ASN1_TYPE c2 = ASN1_TYPE_EMPTY;
+	asn1_node spk = NULL;
+	asn1_node c2 = NULL;
 	const char *oid;
 	gnutls_datum_t tmp = { NULL, 0 };
 
@@ -531,7 +565,7 @@ _gnutls_x509_write_gost_params(const gnutls_pk_params_st * params,
 			      gnutls_datum_t * der)
 {
 	int result;
-	ASN1_TYPE spk = ASN1_TYPE_EMPTY;
+	asn1_node spk = NULL;
 	const char *oid;
 
 	der->data = NULL;
@@ -562,7 +596,7 @@ _gnutls_x509_write_gost_params(const gnutls_pk_params_st * params,
 
 	/* For compatibility per R 1323565.1.023—2018 provide digest OID only
 	 * for GOST-2001 keys or GOST-2012 keys with CryptoPro curves. Do not
-	 * set this optional paramter for TC26 curves */
+	 * set this optional parameter for TC26 curves */
 	if (params->algo == GNUTLS_PK_GOST_01)
 		oid = HASH_OID_GOST_R_3411_94_CRYPTOPRO_PARAMS;
 	else if (params->algo == GNUTLS_PK_GOST_12_256 &&
@@ -629,7 +663,7 @@ _gnutls_x509_write_dsa_pubkey(const gnutls_pk_params_st * params,
 			      gnutls_datum_t * der)
 {
 	int result;
-	ASN1_TYPE spk = ASN1_TYPE_EMPTY;
+	asn1_node spk = NULL;
 
 	der->data = NULL;
 	der->size = 0;
@@ -669,7 +703,7 @@ _gnutls_x509_write_dsa_pubkey(const gnutls_pk_params_st * params,
 /* Encodes the RSA parameters into an ASN.1 RSA private key structure.
  */
 static int
-_gnutls_asn1_encode_rsa(ASN1_TYPE * c2, gnutls_pk_params_st * params)
+_gnutls_asn1_encode_rsa(asn1_node * c2, gnutls_pk_params_st * params)
 {
 	int result, ret;
 	uint8_t null = '\0';
@@ -696,9 +730,9 @@ _gnutls_asn1_encode_rsa(ASN1_TYPE * c2, gnutls_pk_params_st * params)
 	 */
 
 	/* first make sure that no previously allocated data are leaked */
-	if (*c2 != ASN1_TYPE_EMPTY) {
+	if (*c2 != NULL) {
 		asn1_delete_structure(c2);
-		*c2 = ASN1_TYPE_EMPTY;
+		*c2 = NULL;
 	}
 
 	if ((result = asn1_create_element
@@ -803,7 +837,7 @@ _gnutls_asn1_encode_rsa(ASN1_TYPE * c2, gnutls_pk_params_st * params)
 /* Encodes the ECC parameters into an ASN.1 ECPrivateKey structure.
  */
 static int
-_gnutls_asn1_encode_ecc(ASN1_TYPE * c2, gnutls_pk_params_st * params)
+_gnutls_asn1_encode_ecc(asn1_node * c2, gnutls_pk_params_st * params)
 {
 	int ret;
 	uint8_t one = '\x01';
@@ -815,9 +849,9 @@ _gnutls_asn1_encode_ecc(ASN1_TYPE * c2, gnutls_pk_params_st * params)
 		return gnutls_assert_val(GNUTLS_E_INVALID_REQUEST);
 
 	/* first make sure that no previously allocated data are leaked */
-	if (*c2 != ASN1_TYPE_EMPTY) {
+	if (*c2 != NULL) {
 		asn1_delete_structure(c2);
-		*c2 = ASN1_TYPE_EMPTY;
+		*c2 = NULL;
 	}
 
 	if ((ret = asn1_create_element
@@ -835,7 +869,8 @@ _gnutls_asn1_encode_ecc(ASN1_TYPE * c2, gnutls_pk_params_st * params)
 		goto cleanup;
 	}
 
-	if (curve_is_eddsa(params->curve)) {
+	if (curve_is_eddsa(params->curve) ||
+            curve_is_modern_ecdh(params->curve)) {
 		if (params->raw_pub.size == 0 || params->raw_priv.size == 0)
 			return gnutls_assert_val(GNUTLS_E_INVALID_REQUEST);
 		ret =
@@ -909,7 +944,7 @@ cleanup:
 }
 
 static int
-_gnutls_asn1_encode_gost(ASN1_TYPE * c2, gnutls_pk_params_st * params)
+_gnutls_asn1_encode_gost(asn1_node * c2, gnutls_pk_params_st * params)
 {
 	int ret;
 	const char *oid;
@@ -920,9 +955,9 @@ _gnutls_asn1_encode_gost(ASN1_TYPE * c2, gnutls_pk_params_st * params)
 		return gnutls_assert_val(GNUTLS_E_INVALID_REQUEST);
 
 	/* first make sure that no previously allocated data are leaked */
-	if (*c2 != ASN1_TYPE_EMPTY) {
+	if (*c2 != NULL) {
 		asn1_delete_structure(c2);
-		*c2 = ASN1_TYPE_EMPTY;
+		*c2 = NULL;
 	}
 
 	if ((ret = asn1_create_element
@@ -952,15 +987,15 @@ cleanup:
 /* Encodes the DSA parameters into an ASN.1 DSAPrivateKey structure.
  */
 static int
-_gnutls_asn1_encode_dsa(ASN1_TYPE * c2, gnutls_pk_params_st * params)
+_gnutls_asn1_encode_dsa(asn1_node * c2, gnutls_pk_params_st * params)
 {
 	int result, ret;
 	const uint8_t null = '\0';
 
 	/* first make sure that no previously allocated data are leaked */
-	if (*c2 != ASN1_TYPE_EMPTY) {
+	if (*c2 != NULL) {
 		asn1_delete_structure(c2);
-		*c2 = ASN1_TYPE_EMPTY;
+		*c2 = NULL;
 	}
 
 	if ((result = asn1_create_element
@@ -1027,7 +1062,7 @@ cleanup:
 	return ret;
 }
 
-int _gnutls_asn1_encode_privkey(ASN1_TYPE * c2,
+int _gnutls_asn1_encode_privkey(asn1_node * c2,
 				gnutls_pk_params_st * params)
 {
 	switch (params->algo) {
@@ -1039,6 +1074,8 @@ int _gnutls_asn1_encode_privkey(ASN1_TYPE * c2,
 	case GNUTLS_PK_ECDSA:
 	case GNUTLS_PK_EDDSA_ED25519:
 	case GNUTLS_PK_EDDSA_ED448:
+	case GNUTLS_PK_ECDH_X25519:
+	case GNUTLS_PK_ECDH_X448:
 		return _gnutls_asn1_encode_ecc(c2, params);
 	case GNUTLS_PK_GOST_01:
 	case GNUTLS_PK_GOST_12_256:

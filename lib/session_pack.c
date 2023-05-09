@@ -143,7 +143,8 @@ _gnutls_session_pack(gnutls_session_t session,
 		}
 		break;
 	default:
-		return gnutls_assert_val(GNUTLS_E_INTERNAL_ERROR);
+		ret = gnutls_assert_val(GNUTLS_E_INTERNAL_ERROR);
+		goto fail;
 
 	}
 
@@ -599,8 +600,13 @@ pack_srp_auth_info(gnutls_session_t session, gnutls_buffer_st * ps)
 	const char *username = NULL;
 
 	if (info) {
-		username = info->username;
-		len = strlen(info->username) + 1;	/* include the terminating null */
+		if (info->username) {
+			username = info->username;
+			len = strlen(info->username) + 1; /* include the terminating null */
+		} else {
+			username = "\0";
+			len = 1;
+		}
 	} else
 		len = 0;
 
@@ -626,26 +632,27 @@ unpack_srp_auth_info(gnutls_session_t session, gnutls_buffer_st * ps)
 	srp_server_auth_info_t info;
 
 	BUFFER_POP_NUM(ps, username_size);
-	if (username_size > sizeof(info->username)) {
-		gnutls_assert();
-		return GNUTLS_E_INTERNAL_ERROR;
-	}
+	if (username_size > MAX_USERNAME_SIZE + 1)
+		return gnutls_assert_val(GNUTLS_E_INTERNAL_ERROR);
 
-	ret =
-	    _gnutls_auth_info_init(session, GNUTLS_CRD_SRP,
-				  sizeof(srp_server_auth_info_st), 1);
-	if (ret < 0) {
-		gnutls_assert();
-		return ret;
-	}
+	ret = _gnutls_auth_info_init(session, GNUTLS_CRD_SRP,
+				     sizeof(srp_server_auth_info_st), 1);
+	if (ret < 0)
+		return gnutls_assert_val(ret);
 
 	info = _gnutls_get_auth_info(session, GNUTLS_CRD_SRP);
 	if (info == NULL)
 		return gnutls_assert_val(GNUTLS_E_INTERNAL_ERROR);
 
+	gnutls_free(info->username);
+	if (username_size == 0) {
+		info->username = NULL;
+	} else {
+		info->username = gnutls_malloc(username_size);
+		if (info->username == NULL)
+			return gnutls_assert_val(GNUTLS_E_MEMORY_ERROR);
+	}
 	BUFFER_POP(ps, info->username, username_size);
-	if (username_size == 0)
-		info->username[0] = 0;
 
 	ret = 0;
 
@@ -775,15 +782,15 @@ pack_psk_auth_info(gnutls_session_t session, gnutls_buffer_st * ps)
 	if (info == NULL)
 		return gnutls_assert_val(GNUTLS_E_INTERNAL_ERROR);
 
-	username_len = strlen(info->username) + 1;	/* include the terminating null */
-	hint_len = strlen(info->hint) + 1;	/* include the terminating null */
+	username_len = info->username_len;
+	hint_len = info->hint_len + 1; /* include the terminating null */
 
 	size_offset = ps->length;
 	BUFFER_APPEND_NUM(ps, 0);
 	cur_size = ps->length;
 
 	BUFFER_APPEND_PFX4(ps, info->username, username_len);
-	BUFFER_APPEND_PFX4(ps, info->hint, hint_len);
+	BUFFER_APPEND_PFX4(ps, info->hint ? info->hint : "\0", hint_len);
 
 	BUFFER_APPEND_NUM(ps, info->dh.secret_bits);
 	BUFFER_APPEND_PFX4(ps, info->dh.prime.data, info->dh.prime.size);
@@ -823,23 +830,28 @@ unpack_psk_auth_info(gnutls_session_t session, gnutls_buffer_st * ps)
 		return GNUTLS_E_INVALID_REQUEST;
 
 	BUFFER_POP_NUM(ps, username_size);
-	if (username_size > sizeof(info->username)) {
-		gnutls_assert();
-		return GNUTLS_E_INTERNAL_ERROR;
-	}
+	if (username_size > MAX_USERNAME_SIZE)
+		return gnutls_assert_val(GNUTLS_E_INTERNAL_ERROR);
 
+	gnutls_free(info->username);
+	info->username = gnutls_malloc(username_size + 1);
+	if (info->username == NULL)
+		return gnutls_assert_val(GNUTLS_E_MEMORY_ERROR);
 	BUFFER_POP(ps, info->username, username_size);
-	if (username_size == 0)
-		info->username[0] = 0;
+	info->username[username_size] = 0;
+	info->username_len = username_size;
 
+	/* hint_size includes the terminating null */
 	BUFFER_POP_NUM(ps, hint_size);
-	if (hint_size > sizeof(info->hint)) {
-		gnutls_assert();
-		return GNUTLS_E_INTERNAL_ERROR;
-	}
+	if (hint_size > MAX_USERNAME_SIZE + 1)
+		return gnutls_assert_val(GNUTLS_E_INTERNAL_ERROR);
+
+	gnutls_free(info->hint);
+	info->hint = gnutls_malloc(hint_size);
+	if (info->hint == NULL)
+		return gnutls_assert_val(GNUTLS_E_MEMORY_ERROR);
 	BUFFER_POP(ps, info->hint, hint_size);
-	if (hint_size == 0)
-		info->hint[0] = 0;
+	info->hint_len = hint_size - 1;
 
 	BUFFER_POP_NUM(ps, info->dh.secret_bits);
 
@@ -906,11 +918,11 @@ pack_security_parameters(gnutls_session_t session, gnutls_buffer_st * ps)
 	BUFFER_APPEND_NUM(ps, session->security_parameters.client_ctype);
 	BUFFER_APPEND_NUM(ps, session->security_parameters.server_ctype);
 
+	BUFFER_APPEND(ps, session->security_parameters.cs->id, 2);
+
 	/* if we are under TLS 1.3 do not pack keys or params negotiated using an extension
 	 * they are not necessary */
 	if (!session->security_parameters.pversion->tls13_sem) {
-		BUFFER_APPEND(ps, session->security_parameters.cs->id, 2);
-
 		BUFFER_APPEND_PFX1(ps, session->security_parameters.master_secret,
 			      GNUTLS_MASTER_SIZE);
 		BUFFER_APPEND_PFX1(ps, session->security_parameters.client_random,
@@ -1021,12 +1033,12 @@ unpack_security_parameters(gnutls_session_t session, gnutls_buffer_st * ps)
 		       session->internals.resumed_security_parameters.
 		       server_ctype);
 
-	if (!session->internals.resumed_security_parameters.pversion->tls13_sem) {
-		BUFFER_POP(ps, cs, 2);
-		session->internals.resumed_security_parameters.cs = ciphersuite_to_entry(cs);
-		if (session->internals.resumed_security_parameters.cs == NULL)
-			return gnutls_assert_val(GNUTLS_E_INVALID_REQUEST);
+	BUFFER_POP(ps, cs, 2);
+	session->internals.resumed_security_parameters.cs = ciphersuite_to_entry(cs);
+	if (session->internals.resumed_security_parameters.cs == NULL)
+		return gnutls_assert_val(GNUTLS_E_INVALID_REQUEST);
 
+	if (!session->internals.resumed_security_parameters.pversion->tls13_sem) {
 		/* master secret */
 		ret = _gnutls_buffer_pop_datum_prefix8(ps, &t);
 		if (ret < 0) {

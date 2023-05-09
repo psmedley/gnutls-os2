@@ -79,9 +79,12 @@ inline static int _gnutls_rnd_init(void)
 			return GNUTLS_E_RANDOM_FAILED;
 		}
 
-		GNUTLS_STATIC_MUTEX_LOCK(gnutls_rnd_ctx_list_mutex);
+		ret = gnutls_static_mutex_lock(&gnutls_rnd_ctx_list_mutex);
+		if (ret < 0) {
+			return gnutls_assert_val(ret);
+		}
 		ret = append(gnutls_rnd_ctx);
-		GNUTLS_STATIC_MUTEX_UNLOCK(gnutls_rnd_ctx_list_mutex);
+		(void)gnutls_static_mutex_unlock(&gnutls_rnd_ctx_list_mutex);
 		if (ret < 0) {
 			gnutls_assert();
 			_gnutls_rnd_ops.deinit(gnutls_rnd_ctx);
@@ -105,9 +108,9 @@ int _gnutls_rnd_preinit(void)
 
 #elif defined(ENABLE_FIPS140)
 	/* The FIPS140 random generator is only enabled when we are compiled
-	 * with FIPS support, _and_ the system requires FIPS140.
+	 * with FIPS support, _and_ the system is in FIPS installed state.
 	 */
-	if (_gnutls_fips_mode_enabled() == 1) {
+	if (_gnutls_fips_mode_enabled() != 0) {
 		ret = gnutls_crypto_rnd_register(100, &_gnutls_fips_rnd_ops);
 		if (ret < 0)
 			return ret;

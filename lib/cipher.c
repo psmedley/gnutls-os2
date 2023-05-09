@@ -42,6 +42,8 @@
 #include <state.h>
 #include <random.h>
 
+#include <nettle/memxor.h>
+
 static int encrypt_packet(gnutls_session_t session,
 			    uint8_t * cipher_data, int cipher_size,
 			    gnutls_datum_t * plain,
@@ -83,7 +85,11 @@ _gnutls_encrypt(gnutls_session_t session,
 		content_type_t type, record_parameters_st *params)
 {
 	gnutls_datum_t plaintext;
-	const version_entry_st *vers = get_version(session);
+	const version_entry_st *vers =
+		(session->internals.hsk_flags & HSK_EARLY_DATA_IN_FLIGHT) &&
+		!IS_SERVER(session) ?
+		session->internals.resumed_security_parameters.pversion :
+		get_version(session);
 	int ret;
 
 	plaintext.data = (uint8_t *) data;

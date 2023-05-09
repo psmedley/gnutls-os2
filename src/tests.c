@@ -128,9 +128,12 @@ char prio_str[768] = "";
 
 #define ALL_CIPHERS "+CIPHER-ALL:+ARCFOUR-128:+3DES-CBC" GOST_CIPHERS
 #define BLOCK_CIPHERS "+3DES-CBC:+AES-128-CBC:+CAMELLIA-128-CBC:+AES-256-CBC:+CAMELLIA-256-CBC"
+#define SSL3_CIPHERS "+ARCFOUR-128:+3DES-CBC"
 #define ALL_COMP "+COMP-NULL"
 #define ALL_MACS "+MAC-ALL:+MD5:+SHA1" GOST_MACS
+#define SSL3_MACS "+MD5:+SHA1"
 #define ALL_KX "+RSA:+DHE-RSA:+DHE-DSS:+ANON-DH:+ECDHE-RSA:+ECDHE-ECDSA:+ANON-ECDH" GOST_KX
+#define SSL3_KX "+RSA:+DHE-RSA:+DHE-DSS"
 #define INIT_STR "NONE:"
 char rest[384] = "%UNSAFE_RENEGOTIATION:+SIGN-ALL:+GROUP-ALL" GOST_REST;
 
@@ -584,17 +587,26 @@ test_code_t test_dhe_group(gnutls_session_t session)
 			gnutls_datum_t p3;
 			
 			ret2 = gnutls_dh_params_init(&dhp);
-			if (ret2 < 0)
+			if (ret2 < 0) {
+				fclose(fp);
 				return TEST_FAILED;
+			}
 
 			ret2 = gnutls_dh_params_import_raw(dhp, &prime, &gen);
-			if (ret2 < 0)
+			if (ret2 < 0) {
+				gnutls_dh_params_deinit(dhp);
+				fclose(fp);
 				return TEST_FAILED;
+			}
 
 			ret2 = gnutls_dh_params_export2_pkcs3(dhp, GNUTLS_X509_FMT_PEM, &p3);
-			if (ret2 < 0)
+			if (ret2 < 0) {
+				gnutls_dh_params_deinit(dhp);
+				fclose(fp);
 				return TEST_FAILED;
+			}
 
+			gnutls_dh_params_deinit(dhp);
 			fprintf(fp, "\n%s\n", p3.data);
 			gnutls_free(p3.data);
 		}
@@ -605,6 +617,48 @@ test_code_t test_dhe_group(gnutls_session_t session)
 }
 
 test_code_t test_ssl3(gnutls_session_t session)
+{
+	int ret;
+	sprintf(prio_str, INIT_STR
+		SSL3_CIPHERS ":" ALL_COMP ":+VERS-SSL3.0:%%NO_EXTENSIONS:"
+		SSL3_MACS ":" SSL3_KX ":%s", rest);
+	_gnutls_priority_set_direct(session, prio_str);
+
+	gnutls_credentials_set(session, GNUTLS_CRD_CERTIFICATE, xcred);
+
+	ret = test_do_handshake(session);
+	if (ret == TEST_SUCCEED)
+		ssl3_ok = 1;
+
+	return ret;
+}
+
+test_code_t test_ssl3_with_extensions(gnutls_session_t session)
+{
+	int ret;
+	sprintf(prio_str, INIT_STR
+		SSL3_CIPHERS ":" ALL_COMP ":+VERS-SSL3.0:"
+		SSL3_MACS ":" SSL3_KX ":%s", rest);
+	_gnutls_priority_set_direct(session, prio_str);
+
+	gnutls_credentials_set(session, GNUTLS_CRD_CERTIFICATE, xcred);
+
+	ret = test_do_handshake(session);
+	if (ssl3_ok != 0 && ret != TEST_SUCCEED) {
+		/* We need to disable extensions before trying TLS 1.0, because
+		 * it also may not work with extensions. There are known servers
+		 * which partially support both SSL 3.0 and TLS 1.0, but *both*
+		 * only with disabled extensions:
+		 *   https://gitlab.com/gnutls/gnutls/-/issues/958#note_309267384
+		 */
+		tls_ext_ok = 0;
+		strcat(rest, ":%NO_EXTENSIONS");
+	}
+
+	return ret;
+}
+
+test_code_t test_ssl3_unknown_ciphersuites(gnutls_session_t session)
 {
 	int ret;
 	sprintf(prio_str, INIT_STR
@@ -633,7 +687,7 @@ test_code_t test_bye(gnutls_session_t session)
 	char data[20];
 	int secs = 6;
 #ifndef _WIN32
-	int old;
+	struct sigaction sa, old_sa;
 
 	signal(SIGALRM, got_alarm);
 #endif
@@ -654,7 +708,9 @@ test_code_t test_bye(gnutls_session_t session)
 		return TEST_FAILED;
 
 #ifndef _WIN32
-	old = siginterrupt(SIGALRM, 1);
+	(void) sigaction (SIGALRM, NULL, &sa);
+	sa.sa_flags &= ~SA_RESTART;
+	sigaction(SIGALRM, &sa, &old_sa);
 	alarm(secs);
 #else
 	setsockopt((int) gnutls_transport_get_ptr(session), SOL_SOCKET,
@@ -667,7 +723,7 @@ test_code_t test_bye(gnutls_session_t session)
 	while (ret > 0);
 
 #ifndef _WIN32
-	siginterrupt(SIGALRM, old);
+	sigaction(SIGALRM, &old_sa, NULL);
 #else
 	if (WSAGetLastError() == WSAETIMEDOUT ||
 	    WSAGetLastError() == WSAECONNABORTED)
@@ -1003,7 +1059,8 @@ test_code_t test_record_padding(gnutls_session_t session)
 		if (ret == TEST_SUCCEED) {
 			tls1_ok = 1;
 			strcat(rest, ":%COMPAT");
-		}
+		} else
+			ret = TEST_IGNORE2; /* neither succeeded */
 	}
 
 	return ret;
@@ -1012,6 +1069,12 @@ test_code_t test_record_padding(gnutls_session_t session)
 test_code_t test_no_extensions(gnutls_session_t session)
 {
 	int ret;
+
+#ifdef ENABLE_SSL3
+	/* If already disabled by test_ssl3_with_extensions */
+	if (ssl3_ok != 0 && tls_ext_ok == 0)
+		return TEST_FAILED;
+#endif
 
 	sprintf(prio_str,
 		INIT_STR ALL_CIPHERS ":" ALL_COMP ":%s:"
@@ -1034,7 +1097,8 @@ test_code_t test_no_extensions(gnutls_session_t session)
 		if (ret == TEST_SUCCEED) {
 			tls_ext_ok = 0;
 			strcat(rest, ":%NO_EXTENSIONS");
-		}
+		} else
+			ret = TEST_IGNORE2; /* neither succeeded */
 	}
 
 	return ret;
@@ -1156,7 +1220,7 @@ test_code_t test_tls1_6_fallback(gnutls_session_t session)
 	return TEST_SUCCEED;
 }
 
-/* Advertize both TLS 1.0 and SSL 3.0. If the connection fails,
+/* Advertise both TLS 1.0 and SSL 3.0. If the connection fails,
  * but the previous SSL 3.0 test succeeded then disable TLS 1.0.
  */
 test_code_t test_tls_disable0(gnutls_session_t session)
@@ -1373,7 +1437,7 @@ void _gnutls_rsa_pms_set_version(gnutls_session_t session,
 test_code_t test_rsa_pms_version_check(gnutls_session_t session)
 {
 	int ret;
-	/* here we use an arbitary version in the RSA PMS
+	/* here we use an arbitrary version in the RSA PMS
 	 * to see whether to server will check this version.
 	 *
 	 * A normal server would abort this handshake.
@@ -1527,6 +1591,7 @@ test_code_t test_chain_order(gnutls_session_t session)
 	p_size = 0;
 	pos = NULL;
 	for (i=0;i<cert_list_size;i++) {
+		char *new_p;
 		t.data = NULL;
 		ret = gnutls_pem_base64_encode_alloc("CERTIFICATE", &cert_list[i], &t);
 		if (ret < 0) {
@@ -1534,7 +1599,12 @@ test_code_t test_chain_order(gnutls_session_t session)
 			return TEST_FAILED;
 		}
 
-		p = realloc(p, p_size+t.size+1);
+		new_p = realloc(p, p_size+t.size+1);
+		if (!new_p) {
+			free(p);
+			return TEST_FAILED;
+		}
+		p = new_p;
 		pos = p + p_size;
 
 		memcpy(pos, t.data, t.size);

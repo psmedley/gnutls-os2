@@ -42,13 +42,13 @@
 
 static const uint8_t one = 1;
 
-/* Decodes the PKCS #7 signed data, and returns an ASN1_TYPE,
+/* Decodes the PKCS #7 signed data, and returns an asn1_node,
  * which holds them. If raw is non null then the raw decoded
  * data are copied (they are locally allocated) there.
  */
 static int _decode_pkcs7_signed_data(gnutls_pkcs7_t pkcs7)
 {
-	ASN1_TYPE c2;
+	asn1_node c2;
 	int len, result;
 	gnutls_datum_t tmp = {NULL, 0};
 
@@ -143,6 +143,8 @@ static int _decode_pkcs7_signed_data(gnutls_pkcs7_t pkcs7)
 		}
 	}
 
+	if (pkcs7->signed_data)
+		asn1_delete_structure(&pkcs7->signed_data);
 	pkcs7->signed_data = c2;
 	gnutls_free(tmp.data);
 
@@ -229,7 +231,9 @@ void gnutls_pkcs7_deinit(gnutls_pkcs7_t pkcs7)
  *
  * This function will convert the given DER or PEM encoded PKCS7 to
  * the native #gnutls_pkcs7_t format.  The output will be stored in
- * @pkcs7.
+ * @pkcs7. Any signed data that may be present inside the @pkcs7
+ * structure, like certificates set by gnutls_pkcs7_set_crt(), will
+ * be freed and overwritten by this function.
  *
  * If the PKCS7 is PEM encoded it should have a header of "PKCS7".
  *
@@ -477,7 +481,7 @@ void gnutls_pkcs7_signature_info_deinit(gnutls_pkcs7_signature_info_st * info)
 static time_t parse_time(gnutls_pkcs7_t pkcs7, const char *root)
 {
 	char tval[128];
-	ASN1_TYPE c2 = ASN1_TYPE_EMPTY;
+	asn1_node c2 = NULL;
 	time_t ret;
 	int result, len;
 
@@ -1318,7 +1322,8 @@ gnutls_x509_crt_t find_signer(gnutls_pkcs7_t pkcs7, gnutls_x509_trust_list_t tl,
 				issuer = find_verified_issuer_of(pkcs7, issuer, purpose, vflags);
 
 				if (issuer != NULL && gnutls_x509_crt_check_issuer(issuer, issuer)) {
-					if (prev) gnutls_x509_crt_deinit(prev);
+					if (prev && prev != signer)
+						gnutls_x509_crt_deinit(prev);
 					prev = issuer;
 					break;
 				}
@@ -1484,7 +1489,7 @@ static int reencode(gnutls_pkcs7_t pkcs7)
 {
 	int result;
 
-	if (pkcs7->signed_data != ASN1_TYPE_EMPTY) {
+	if (pkcs7->signed_data != NULL) {
 		disable_opt_fields(pkcs7);
 
 		/* Replace the old content with the new
@@ -1581,11 +1586,11 @@ gnutls_pkcs7_export2(gnutls_pkcs7_t pkcs7,
 /* Creates an empty signed data structure in the pkcs7
  * structure and returns a handle to the signed data.
  */
-static int create_empty_signed_data(ASN1_TYPE pkcs7, ASN1_TYPE * sdata)
+static int create_empty_signed_data(asn1_node pkcs7, asn1_node * sdata)
 {
 	int result;
 
-	*sdata = ASN1_TYPE_EMPTY;
+	*sdata = NULL;
 
 	if ((result = asn1_create_element
 	     (_gnutls_get_pkix(), "PKIX1.pkcs-7-SignedData",
@@ -1662,7 +1667,7 @@ int gnutls_pkcs7_set_crt_raw(gnutls_pkcs7_t pkcs7, const gnutls_datum_t * crt)
 	/* If the signed data are uninitialized
 	 * then create them.
 	 */
-	if (pkcs7->signed_data == ASN1_TYPE_EMPTY) {
+	if (pkcs7->signed_data == NULL) {
 		/* The pkcs7 structure is new, so create the
 		 * signedData.
 		 */
@@ -1769,7 +1774,7 @@ int gnutls_pkcs7_delete_crt(gnutls_pkcs7_t pkcs7, int indx)
 	/* Step 2. Delete the certificate.
 	 */
 
-	snprintf(root2, sizeof(root2), "certificates.?%u", indx + 1);
+	snprintf(root2, sizeof(root2), "certificates.?%d", indx + 1);
 
 	result = asn1_write_value(pkcs7->signed_data, root2, NULL, 0);
 	if (result != ASN1_SUCCESS) {
@@ -1937,7 +1942,7 @@ int gnutls_pkcs7_set_crl_raw(gnutls_pkcs7_t pkcs7, const gnutls_datum_t * crl)
 	/* If the signed data are uninitialized
 	 * then create them.
 	 */
-	if (pkcs7->signed_data == ASN1_TYPE_EMPTY) {
+	if (pkcs7->signed_data == NULL) {
 		/* The pkcs7 structure is new, so create the
 		 * signedData.
 		 */
@@ -2033,7 +2038,7 @@ int gnutls_pkcs7_delete_crl(gnutls_pkcs7_t pkcs7, int indx)
 	/* Delete the crl.
 	 */
 
-	snprintf(root2, sizeof(root2), "crls.?%u", indx + 1);
+	snprintf(root2, sizeof(root2), "crls.?%d", indx + 1);
 
 	result = asn1_write_value(pkcs7->signed_data, root2, NULL, 0);
 	if (result != ASN1_SUCCESS) {
@@ -2048,7 +2053,7 @@ int gnutls_pkcs7_delete_crl(gnutls_pkcs7_t pkcs7, int indx)
 	return result;
 }
 
-static int write_signer_id(ASN1_TYPE c2, const char *root,
+static int write_signer_id(asn1_node c2, const char *root,
 			   gnutls_x509_crt_t signer, unsigned flags)
 {
 	int result;
@@ -2122,7 +2127,7 @@ static int write_signer_id(ASN1_TYPE c2, const char *root,
 	return 0;
 }
 
-static int add_attrs(ASN1_TYPE c2, const char *root, gnutls_pkcs7_attrs_t attrs,
+static int add_attrs(asn1_node c2, const char *root, gnutls_pkcs7_attrs_t attrs,
 		     unsigned already_set)
 {
 	char name[256];
@@ -2172,7 +2177,7 @@ static int add_attrs(ASN1_TYPE c2, const char *root, gnutls_pkcs7_attrs_t attrs,
 	return 0;
 }
 
-static int write_attributes(ASN1_TYPE c2, const char *root,
+static int write_attributes(asn1_node c2, const char *root,
 			    const gnutls_datum_t * data,
 			    const mac_entry_st * me,
 			    gnutls_pkcs7_attrs_t other_attrs, unsigned flags)
@@ -2277,7 +2282,7 @@ static int write_attributes(ASN1_TYPE c2, const char *root,
 		/* If we add any attribute we should add them all */
 		/* Add hash */
 		digest_size = _gnutls_hash_get_algo_len(me);
-		ret = gnutls_hash_fast(me->id, data->data, data->size, digest);
+		ret = gnutls_hash_fast(MAC_TO_DIG(me->id), data->data, data->size, digest);
 		if (ret < 0) {
 			gnutls_assert();
 			return ret;
@@ -2348,7 +2353,7 @@ int gnutls_pkcs7_sign(gnutls_pkcs7_t pkcs7,
 	if (pkcs7 == NULL || me == NULL)
 		return GNUTLS_E_INVALID_REQUEST;
 
-	if (pkcs7->signed_data == ASN1_TYPE_EMPTY) {
+	if (pkcs7->signed_data == NULL) {
 		result =
 		    asn1_create_element(_gnutls_get_pkix(),
 					"PKIX1.pkcs-7-SignedData",

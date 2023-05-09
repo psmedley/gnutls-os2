@@ -216,7 +216,8 @@ int add_trust_list_pkcs11_object_url(gnutls_x509_trust_list_t list, const char *
 		goto cleanup;
 	}
 
-	xcrt_list = gnutls_malloc(sizeof(gnutls_x509_crt_t) * pcrt_list_size);
+	xcrt_list = _gnutls_reallocarray(NULL, pcrt_list_size,
+					 sizeof(gnutls_x509_crt_t));
 	if (xcrt_list == NULL) {
 		ret = GNUTLS_E_MEMORY_ERROR;
 		goto cleanup;
@@ -264,7 +265,8 @@ int remove_pkcs11_object_url(gnutls_x509_trust_list_t list, const char *url)
 		goto cleanup;
 	}
 
-	xcrt_list = gnutls_malloc(sizeof(gnutls_x509_crt_t) * pcrt_list_size);
+	xcrt_list = _gnutls_reallocarray(NULL, pcrt_list_size,
+					 sizeof(gnutls_x509_crt_t));
 	if (xcrt_list == NULL) {
 		ret = GNUTLS_E_MEMORY_ERROR;
 		goto cleanup;
@@ -356,7 +358,7 @@ gnutls_x509_trust_list_add_trust_file(gnutls_x509_trust_list_t list,
 		} else
 #endif
 		{
-			cas.data = (void *) read_binary_file(ca_file, &size);
+			cas.data = (void *) read_file(ca_file, RF_BINARY, &size);
 			if (cas.data == NULL) {
 				gnutls_assert();
 				return GNUTLS_E_FILE_ERROR;
@@ -366,7 +368,7 @@ gnutls_x509_trust_list_add_trust_file(gnutls_x509_trust_list_t list,
 	}
 
 	if (crl_file) {
-		crls.data = (void *) read_binary_file(crl_file, &size);
+		crls.data = (void *) read_file(crl_file, RF_BINARY, &size);
 		if (crls.data == NULL) {
 			gnutls_assert();
 			return GNUTLS_E_FILE_ERROR;
@@ -551,7 +553,7 @@ gnutls_x509_trust_list_remove_trust_file(gnutls_x509_trust_list_t list,
 	} else
 #endif
 	{
-		cas.data = (void *) read_binary_file(ca_file, &size);
+		cas.data = (void *) read_file(ca_file, RF_BINARY, &size);
 		if (cas.data == NULL) {
 			gnutls_assert();
 			return GNUTLS_E_FILE_ERROR;

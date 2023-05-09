@@ -72,7 +72,7 @@ _gnutls_encode_ber_rs_raw(gnutls_datum_t * sig_value,
 			  const gnutls_datum_t * r,
 			  const gnutls_datum_t * s)
 {
-	ASN1_TYPE sig;
+	asn1_node sig;
 	int result, ret;
 	uint8_t *tmp = NULL;
 
@@ -137,7 +137,7 @@ _gnutls_encode_ber_rs_raw(gnutls_datum_t * sig_value,
 int
 _gnutls_encode_ber_rs(gnutls_datum_t * sig_value, bigint_t r, bigint_t s)
 {
-	ASN1_TYPE sig;
+	asn1_node sig;
 	int result;
 
 	if ((result =
@@ -178,7 +178,7 @@ int
 _gnutls_decode_ber_rs(const gnutls_datum_t * sig_value, bigint_t * r,
 		      bigint_t * s)
 {
-	ASN1_TYPE sig;
+	asn1_node sig;
 	int result;
 
 	if ((result =
@@ -253,7 +253,7 @@ int
 _gnutls_decode_ber_rs_raw(const gnutls_datum_t * sig_value, gnutls_datum_t *r,
 			  gnutls_datum_t *s)
 {
-	ASN1_TYPE sig;
+	asn1_node sig;
 	int result;
 
 	if ((result =
@@ -592,7 +592,7 @@ encode_ber_digest_info(const mac_entry_st * e,
 			const gnutls_datum_t * digest,
 			gnutls_datum_t * output)
 {
-	ASN1_TYPE dinfo = ASN1_TYPE_EMPTY;
+	asn1_node dinfo = NULL;
 	int result;
 	const char *algo;
 	uint8_t *tmp_output;
@@ -726,7 +726,7 @@ gnutls_decode_ber_digest_info(const gnutls_datum_t * info,
 		       gnutls_digest_algorithm_t * hash,
 		       unsigned char * digest, unsigned int *digest_size)
 {
-	ASN1_TYPE dinfo = ASN1_TYPE_EMPTY;
+	asn1_node dinfo = NULL;
 	int result;
 	char str[MAX(MAX_OID_SIZE, MAX_HASH_SIZE)];
 	int len;
@@ -1031,7 +1031,7 @@ int _gnutls_params_get_ecc_raw(const gnutls_pk_params_st* params,
 
 	e = _gnutls_ecc_curve_get_params(params->curve);
 
-	if (_curve_is_eddsa(e)) {
+	if (_curve_is_eddsa(e) || _curve_is_modern_ecdh(e)) {
 		if (x) {
 			ret = _gnutls_set_datum(x, params->raw_pub.data, params->raw_pub.size);
 			if (ret < 0) {
@@ -1200,6 +1200,18 @@ pk_prepare_hash(gnutls_pk_algorithm_t pk,
 	case GNUTLS_PK_RSA:
 		if (unlikely(hash == NULL))
 			return gnutls_assert_val(GNUTLS_E_INVALID_REQUEST);
+
+		/* Only SHA-2 is allowed in FIPS 140-3 */
+		switch (hash->id) {
+		case GNUTLS_MAC_SHA256:
+		case GNUTLS_MAC_SHA384:
+		case GNUTLS_MAC_SHA512:
+		case GNUTLS_MAC_SHA224:
+			break;
+		default:
+			_gnutls_switch_fips_state(GNUTLS_FIPS140_OP_NOT_APPROVED);
+		}
+
 		/* Encode the digest as a DigestInfo
 		 */
 		if ((ret =
@@ -1216,6 +1228,8 @@ pk_prepare_hash(gnutls_pk_algorithm_t pk,
 	case GNUTLS_PK_ECDSA:
 	case GNUTLS_PK_EDDSA_ED25519:
 	case GNUTLS_PK_EDDSA_ED448:
+	case GNUTLS_PK_ECDH_X25519:
+	case GNUTLS_PK_ECDH_X448:
 	case GNUTLS_PK_GOST_01:
 	case GNUTLS_PK_GOST_12_256:
 	case GNUTLS_PK_GOST_12_512:

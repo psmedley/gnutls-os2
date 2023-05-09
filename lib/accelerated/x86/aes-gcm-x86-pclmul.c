@@ -60,6 +60,7 @@ struct aes_gcm_ctx {
 	struct gcm128_context gcm;
 	unsigned finished;
 	unsigned auth_finished;
+	size_t rekey_counter;
 };
 
 void gcm_init_clmul(u128 Htable[16], const uint64_t Xi[2]);
@@ -81,6 +82,7 @@ aes_gcm_cipher_init(gnutls_cipher_algorithm_t algorithm, void **_ctx,
 {
 	/* we use key size to distinguish */
 	if (algorithm != GNUTLS_CIPHER_AES_128_GCM &&
+	    algorithm != GNUTLS_CIPHER_AES_192_GCM &&
 	    algorithm != GNUTLS_CIPHER_AES_256_GCM)
 		return GNUTLS_E_INVALID_REQUEST;
 
@@ -115,6 +117,7 @@ aes_gcm_cipher_setkey(void *_ctx, const void *userkey, size_t keysize)
 
 	gcm_init_clmul(ctx->gcm.Htable, ctx->gcm.H.u);
 
+	ctx->rekey_counter = 0;
 	return 0;
 }
 
@@ -139,6 +142,7 @@ static int aes_gcm_setiv(void *_ctx, const void *iv, size_t iv_size)
 	ctx->gcm.Yi.c[GCM_BLOCK_SIZE - 1] = 2;
 	ctx->finished = 0;
 	ctx->auth_finished = 0;
+	ctx->rekey_counter = 0;
 	return 0;
 }
 
@@ -183,9 +187,18 @@ aes_gcm_encrypt(void *_ctx, const void *src, size_t src_size,
 	int exp_blocks = blocks * GCM_BLOCK_SIZE;
 	int rest = src_size - (exp_blocks);
 	uint32_t counter;
+	int ret;
 
 	if (unlikely(ctx->finished))
 		return gnutls_assert_val(GNUTLS_E_INVALID_REQUEST);
+
+	if (unlikely(length < src_size))
+		return gnutls_assert_val(GNUTLS_E_SHORT_MEMORY_BUFFER);
+
+	ret = record_aes_gcm_encrypt_size(&ctx->rekey_counter, src_size);
+	if (ret < 0) {
+		return gnutls_assert_val(ret);
+	}
 
 	if (blocks > 0) {
 		aesni_ctr32_encrypt_blocks(src, dst,
@@ -221,6 +234,9 @@ aes_gcm_decrypt(void *_ctx, const void *src, size_t src_size,
 
 	if (unlikely(ctx->finished))
 		return gnutls_assert_val(GNUTLS_E_INVALID_REQUEST);
+
+	if (unlikely(dst_size < src_size))
+		return gnutls_assert_val(GNUTLS_E_SHORT_MEMORY_BUFFER);
 
 	gcm_ghash(ctx, src, src_size);
 	ctx->gcm.len.u[1] += src_size;

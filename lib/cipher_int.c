@@ -55,7 +55,7 @@ int _gnutls_cipher_exists(gnutls_cipher_algorithm_t cipher)
 	const gnutls_crypto_cipher_st *cc;
 	int ret;
 
-	if (is_cipher_algo_forbidden(cipher))
+	if (!is_cipher_algo_allowed(cipher))
 		return 0;
 
 	/* All the other ciphers are disabled on the back-end library.
@@ -102,6 +102,7 @@ _gnutls_cipher_init(cipher_hd_st *handle, const cipher_entry_st *e,
 		handle->tag = cc->tag;
 		handle->setiv = cc->setiv;
 		handle->getiv = cc->getiv;
+		handle->setkey = cc->setkey;
 
 		/* if cc->init() returns GNUTLS_E_NEED_FALLBACK we
 		 * use the default ciphers */
@@ -109,8 +110,15 @@ _gnutls_cipher_init(cipher_hd_st *handle, const cipher_entry_st *e,
 		SR_FB(cc->setkey(handle->handle, key->data, key->size),
 		   cc_cleanup);
 		if (iv) {
-			if (unlikely(cc->setiv == NULL)) /* the API doesn't accept IV */
+			/* the API doesn't accept IV */
+			if (unlikely(cc->setiv == NULL)) {
+				if (cc->aead_encrypt) {
+					if (handle->handle)
+						handle->deinit(handle->handle);
+					goto fallback;
+				}
 				return gnutls_assert_val(GNUTLS_E_INVALID_REQUEST);
+			}
 			SR(cc->setiv(handle->handle, iv->data, iv->size),
 			   cc_cleanup);
 		}
@@ -128,6 +136,7 @@ _gnutls_cipher_init(cipher_hd_st *handle, const cipher_entry_st *e,
 	handle->tag = _gnutls_cipher_ops.tag;
 	handle->setiv = _gnutls_cipher_ops.setiv;
 	handle->getiv = _gnutls_cipher_ops.getiv;
+	handle->setkey = _gnutls_cipher_ops.setkey;
 
 	/* otherwise use generic cipher interface
 	 */

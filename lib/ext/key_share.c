@@ -656,6 +656,18 @@ key_share_recv_params(gnutls_session_t session,
 	return 0;
 }
 
+static inline bool
+pk_type_is_ecdhx(gnutls_pk_algorithm_t pk)
+{
+	return pk == GNUTLS_PK_ECDH_X25519 || pk == GNUTLS_PK_ECDH_X448;
+}
+
+static inline bool
+pk_type_equal(gnutls_pk_algorithm_t a, gnutls_pk_algorithm_t b)
+{
+	return a == b || (pk_type_is_ecdhx(a) && pk_type_is_ecdhx(b));
+}
+
 /* returns data_size or a negative number on failure
  */
 static int
@@ -664,14 +676,14 @@ key_share_send_params(gnutls_session_t session,
 {
 	unsigned i;
 	int ret;
-	unsigned char *lengthp;
-	unsigned int cur_length;
 	unsigned int generated = 0;
 	const gnutls_group_entry_st *group;
 	const version_entry_st *ver;
 
 	/* this extension is only being sent on client side */
 	if (session->security_parameters.entity == GNUTLS_CLIENT) {
+		unsigned int length_pos;
+
 		ver = _gnutls_version_max(session);
 		if (unlikely(ver == NULL || ver->key_shares == 0))
 			return 0;
@@ -679,15 +691,12 @@ key_share_send_params(gnutls_session_t session,
 		if (!have_creds_for_tls13(session))
 			return 0;
 
-		/* write the total length later */
-		lengthp = &extdata->data[extdata->length];
+		length_pos = extdata->length;
 
 		ret =
 		    _gnutls_buffer_append_prefix(extdata, 16, 0);
 		if (ret < 0)
 			return gnutls_assert_val(ret);
-
-		cur_length = extdata->length;
 
 		if (session->internals.hsk_flags & HSK_HRR_RECEIVED) { /* we know the group */
 			group = get_group(session);
@@ -713,12 +722,18 @@ key_share_send_params(gnutls_session_t session,
 			/* generate key shares for out top-(max_groups) groups
 			 * if they are of different PK type. */
 			for (i = 0; i < session->internals.priorities->groups.size; i++) {
+				unsigned int j;
+
 				group = session->internals.priorities->groups.entry[i];
 
-				if (generated == 1 && group->pk == selected_groups[0])
+				for (j = 0; j < generated; j++) {
+					if (pk_type_equal(group->pk, selected_groups[j])) {
+						break;
+					}
+				}
+				if (j < generated) {
 					continue;
-				else if (generated == 2 && (group->pk == selected_groups[1] || group->pk == selected_groups[0]))
-					continue;
+				}
 
 				selected_groups[generated] = group->pk;
 
@@ -736,7 +751,8 @@ key_share_send_params(gnutls_session_t session,
 		}
 
 		/* copy actual length */
-		_gnutls_write_uint16(extdata->length - cur_length, lengthp);
+		_gnutls_write_uint16(extdata->length - length_pos - 2,
+				     &extdata->data[length_pos]);
 
 	} else { /* server */
 		ver = get_version(session);

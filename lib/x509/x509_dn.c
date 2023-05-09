@@ -173,7 +173,7 @@ static int read_attr_and_val(const char **ptr,
 
 	/* remove spaces from the end */
 	while(val->size > 0 && c_isspace(val->data[val->size-1])) {
-		if (val->size-2 > 0 && val->data[val->size-2] == '\\')
+		if (val->size > 2 && val->data[val->size-2] == '\\')
 			break;
 		val->size--;
 	}
@@ -559,8 +559,8 @@ int
 gnutls_x509_dn_get_rdn_ava(gnutls_x509_dn_t dn,
 			   int irdn, int iava, gnutls_x509_ava_st * ava)
 {
-	ASN1_TYPE rdn, elem;
-	ASN1_DATA_NODE vnode;
+	asn1_node rdn, elem;
+	asn1_data_node_st vnode;
 	long len;
 	int lenlen, remlen, ret;
 	char rbuf[MAX_NAME_SIZE];

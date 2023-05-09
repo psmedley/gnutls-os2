@@ -5,6 +5,489 @@ Copyright (C) 2000-2016 Free Software Foundation, Inc.
 Copyright (C) 2013-2019 Nikos Mavrogiannopoulos
 See the end for copying conditions.
 
+* Version 3.7.9 (released 2023-02-09)
+
+** libgnutls: Fix a Bleichenbacher oracle in the TLS RSA key exchange.
+   Reported by Hubert Kario (#1050). Fix developed by Alexander Sosedkin.
+   [GNUTLS-SA-2020-07-14, CVSS: medium] [CVE-2023-0361]
+
+** API and ABI modifications:
+No changes since last version.
+
+* Version 3.7.8 (released 2022-09-27)
+
+** libgnutls: In FIPS140 mode, RSA signature verification is an approved
+   operation if the key has modulus with known sizes (1024, 1280,
+   1536, and 1792 bits), in addition to any modulus sizes larger than
+   2048 bits, according to SP800-131A rev2.
+
+** libgnutls: gnutls_session_channel_binding performs additional checks when
+   GNUTLS_CB_TLS_EXPORTER is requested. According to RFC9622 4.2, the
+   "tls-exporter" channel binding is only usable when the handshake is
+   bound to a unique master secret (i.e., either TLS 1.3 or extended
+   master secret extension is negotiated). Otherwise the function now
+   returns error.
+
+** libgnutls: usage of the following functions, which are designed to
+   loosen restrictions imposed by allowlisting mode of configuration,
+   has been additionally restricted. Invoking them is now only allowed
+   if system-wide TLS priority string has not been initialized yet:
+gnutls_digest_set_secure
+gnutls_sign_set_secure
+gnutls_sign_set_secure_for_certs
+gnutls_protocol_set_enabled
+
+** API and ABI modifications:
+No changes since last version.
+
+* Version 3.7.7 (released 2022-07-28)
+
+** libgnutls: Fixed double free during verification of pkcs7 signatures.
+   Reported by Jaak Ristioja (#1383). [GNUTLS-SA-2022-07-07, CVSS: medium]
+   [CVE-2022-2509]
+
+** libgnutls: gnutls_hkdf_expand now only accepts LENGTH argument less than or
+   equal to 255 times hash digest size, to comply with RFC 5869 2.3.
+
+** libgnutls: Length limit for TLS PSK usernames has been increased
+   from 128 to 65535 characters (#1323).
+
+** libgnutls: AES-GCM encryption function now limits plaintext
+   length to 2^39-256 bits, according to SP800-38D 5.2.1.1.
+
+** libgnutls: New block cipher functions have been added to transparently
+   handle padding.  gnutls_cipher_encrypt3 and gnutls_cipher_decrypt3 can be
+   used in combination of GNUTLS_CIPHER_PADDING_PKCS7 flag to automatically
+   add/remove padding if the length of the original plaintext is not a multiple
+   of the block size.
+
+** libgnutls: New function for manual FIPS self-testing.
+
+** API and ABI modifications:
+gnutls_fips140_run_self_tests: New function
+gnutls_cipher_encrypt3: New function
+gnutls_cipher_decrypt3: New function
+gnutls_cipher_padding_flags_t: New enum
+
+** guile: Guile 1.8 is no longer supported
+
+** guile: Session record port treats premature termination as EOF
+   Previously, a ‘gnutls-error’ exception with the
+   ‘error/premature-termination’ value would be thrown while reading from a
+   session record port when the underlying session was terminated
+   prematurely.  This was inconvenient since users of the port may not be
+   prepared to handle such an exception.
+   Reading from the session record port now returns the end-of-file object
+   instead of throwing an exception, just like it would for a proper
+   session termination.
+
+** guile: Session record ports can have a ‘close’ procedure.
+   The ‘session-record-port’ procedure now takes an optional second
+   parameter, and a new ‘set-session-record-port-close!’ procedure is
+   provided to specify a ‘close’ procedure for a session record port.
+   This ‘close’ procedure lets users specify cleanup operations for when
+   the port is closed, such as closing the file descriptor or port that
+   backs the underlying session.
+
+* Version 3.7.6 (released 2022-05-27)
+
+** libgnutls: Fixed invalid write when gnutls_realloc_zero()
+   is called with new_size < old_size. This bug caused heap
+   corruption when gnutls_realloc_zero() has been set as gmp
+   reallocfunc (!1592, #1367, #1368, #1369).
+
+** API and ABI modifications:
+No changes since last version.
+
+* Version 3.7.5 (released 2022-05-15)
+
+** libgnutls: The GNUTLS_NO_TICKETS_TLS12 flag and %NO_TICKETS_TLS12 priority
+   modifier have been added to disable session ticket usage in TLS 1.2 because
+   it does not provide forward secrecy (#477).  On the other hand, since session
+   tickets in TLS 1.3 do provide forward secrecy, the PFS priority string now
+   only disables session tickets in TLS 1.2.  Future backward incompatibility:
+   in the next major release of GnuTLS, we plan to remove those flag and
+   modifier, and make GNUTLS_NO_TICKETS and %NO_TICKETS only affect TLS 1.2.
+
+** gnutls-cli, gnutls-serv: Channel binding for printing information
+   has been changed from tls-unique to tls-exporter as tls-unique is
+   not supported in TLS 1.3.
+
+** libgnutls: Certificate sanity checks has been enhanced to make
+   gnutls more RFC 5280 compliant (!1583).
+   Following changes were included:
+   - critical extensions are parsed when loading x509
+     certificate to prohibit any random octet strings.
+     Requires strict-x509 configure option to be enabled
+   - garbage bits in Key Usage extension are prohibited
+   - empty DirectoryStrings in Distinguished name structures
+     of Issuer and Subject name are prohibited
+
+** libgnutls: Removed 3DES from FIPS approved algorithms (#1353).
+   According to the section 2 of SP800-131A Rev.2, 3DES algorithm
+   will be disallowed for encryption after December 31, 2023:
+   https://csrc.nist.gov/publications/detail/sp/800-131a/rev-2/final
+
+** libgnutls: Optimized support for AES-SIV-CMAC algorithms (#1217, #1312).
+   The existing AEAD API that works in a scatter-gather fashion
+   (gnutls_aead_cipher_encryptv2) has been extended to support AES-SIV-CMAC.
+   For further optimization, new function (gnutls_aead_cipher_set_key) has been
+   added to set key on the existing AEAD handle without re-allocation.
+
+** libgnutls: HKDF and AES-GCM algorithms are now approved in FIPS-140 mode
+   when used in TLS (#1311).
+
+** The configure arguments for Brotli and Zstandard (zstd) support
+   have changed to reflect the previous help text: they are now
+   --with-brotli/--with-zstd respectively (#1342).
+
+** Detecting the Zstandard (zstd) library in configure has been
+   fixed (#1343).
+
+** API and ABI modifications:
+GNUTLS_NO_TICKETS_TLS12: New flag
+gnutls_aead_cipher_set_key: New function
+
+* Version 3.7.4 (released 2022-03-17)
+
+** libgnutls: Added support for certificate compression as defined in RFC8879
+   (#1301). New API functions (gnutls_compress_certificate_get_selected_method
+   and gnutls_compress_certificate_set_methods) allow client and server to set
+   their preferences.
+
+** certtool: Added option --compress-cert that allows user to specify
+   compression methods for certificate compression.
+
+** libgnutls: GnuTLS can now be compiled with --enable-strict-x509 configure
+   option to enforce stricter certificate sanity checks that are compliant with
+   RFC5280.
+
+** libgnutls: Removed IA5String type from DirectoryString within issuer
+   and subject name to make DirectoryString RFC5280 compliant.
+
+** libgnutls: Added function (gnutls_record_send_file) to send file content from
+   open file descriptor (!1486). The implementation is optimized if KTLS (kernel
+   TLS) is enabled.
+
+** libgnutls: Added function (gnutls_ciphersuite_get) to retrieve the name of
+   current ciphersuite from TLS session (#1291).
+
+** libgnutls: The run-time dependency on tpm2-tss is now re-implemented using
+   dlopen, so GnuTLS does not indirectly link to other crypto libraries until
+   TPM2 functionality is utilized (!1544).
+
+** API and ABI modifications:
+GNUTLS_COMP_BROTLI: New gnutls_compression_method_t enum member
+GNUTLS_COMP_ZSTD: New gnutls_compression_method_t enum member
+gnutls_compress_certificate_get_selected_method: Added
+gnutls_compress_certificate_set_methods: Added
+gnutls_ciphersuite_get: New function
+gnutls_record_send_file: New function
+libgnutlsxx: Soname bumped due to ABI breakage introduced in 3.7.1
+
+* Version 3.7.3 (released 2022-01-17)
+
+** libgnutls: The allowlisting configuration mode has been added to the system-wide
+   settings. In this mode, all the algorithms are initially marked as insecure
+   or disabled, while the applications can re-enable them either through the
+   [overrides] section of the configuration file or the new API (#1172).
+
+** The build infrastructure no longer depends on GNU AutoGen for generating
+   command-line option handling, template file parsing in certtool, and
+   documentation generation (#773, #774). This change also removes run-time or
+   bundled dependency on the libopts library, and requires Python 3.6 or later
+   to regenerate the distribution tarball.
+
+   Note that this brings in known backward incompatibility in command-line
+   tools, such as long options are now case sensitive, while previously they
+   were treated in a case insensitive manner: for example --RSA is no longer a
+   valid option of certtool. The existing scripts using GnuTLS tools may need
+   adjustment for this change.
+
+** libgnutls: The tpm2-tss-engine compatible private blobs can be loaded and
+   used as a gnutls_privkey_t (#594). The code was originally written for the
+   OpenConnect VPN project by David Woodhouse. To generate such blobs, use the
+   tpm2tss-genkey tool from tpm2-tss-engine:
+   https://github.com/tpm2-software/tpm2-tss-engine/#rsa-operations
+   or the tpm2_encodeobject tool from unreleased tpm2-tools.
+
+** libgnutls: The library now transparently enables Linux KTLS
+   (kernel TLS) when the feature is compiled in with --enable-ktls configuration
+   option (#1113). If the KTLS initialization fails it automatically falls back
+   to the user space implementation.
+
+** certtool: The certtool command can now read the Certificate Transparency
+   (RFC 6962) SCT extension (#232).  New API functions are also provided to
+   access and manipulate the extension values.
+
+** certtool: The certtool command can now generate, manipulate, and evaluate
+   x25519 and x448 public keys, private keys, and certificates.
+
+** libgnutls: Disabling a hashing algorithm through "insecure-hash"
+   configuration directive now also disables TLS ciphersuites that use it as a
+   PRF algorithm.
+
+** libgnutls: PKCS#12 files are now created with modern algorithms by default
+   (!1499).  Previously certtool used PKCS12-3DES-SHA1 for key derivation and
+   HMAC-SHA1 as an integity measure in PKCS#12.  Now it uses AES-128-CBC with
+   PBKDF2 and SHA-256 for both key derivation and MAC algorithms, and the
+   default PBKDF2 iteration count has been increased to 600000.
+
+** libgnutls: PKCS#12 keys derived using GOST algorithm now uses
+   HMAC_GOSTR3411_2012_512 instead of HMAC_GOSTR3411_2012_256 for integrity, to
+   conform with the latest TC-26 requirements (#1225).
+
+** libgnutls: The library now provides a means to report the status of approved
+   cryptographic operations (!1465). To adhere to the FIPS140-3 IG 2.4.C., this
+   complements the existing mechanism to prohibit the use of unapproved
+   algorithms by making the library unusable state.
+
+** gnutls-cli: The gnutls-cli command now provides a --list-config option to
+   print the library configuration (!1508).
+
+** libgnutls: Fixed possible race condition in
+   gnutls_x509_trust_list_verify_crt2 when a single trust list object is shared
+   among multiple threads (#1277). [GNUTLS-SA-2022-01-17, CVSS: low]
+
+** API and ABI modifications:
+GNUTLS_PRIVKEY_FLAG_RSA_PSS_FIXED_SALT_LENGTH: new flag in gnutls_privkey_flags_t
+GNUTLS_VERIFY_RSA_PSS_FIXED_SALT_LENGTH: new flag in gnutls_certificate_verify_flags
+gnutls_ecc_curve_set_enabled: Added.
+gnutls_sign_set_secure: Added.
+gnutls_sign_set_secure_for_certs: Added.
+gnutls_digest_set_secure: Added.
+gnutls_protocol_set_enabled: Added.
+gnutls_fips140_context_init: New function
+gnutls_fips140_context_deinit: New function
+gnutls_fips140_push_context: New function
+gnutls_fips140_pop_context: New function
+gnutls_fips140_get_operation_state: New function
+gnutls_fips140_operation_state_t: New enum
+gnutls_transport_is_ktls_enabled: New function
+gnutls_get_library_configuration: New function
+
+* Version 3.7.2 (released 2021-05-29)
+
+** libgnutls: The priority string option %DISABLE_TLS13_COMPAT_MODE was added
+   to disable TLS 1.3 middlebox compatibility mode
+
+** libgnutls: The Linux kernel AF_ALG based acceleration has been added.
+   This can be enabled with --enable-afalg configure option, when libkcapi
+   package is installed (#308).
+
+** libgnutls: Fixed timing of early data exchange. Previously, the client was
+   sending early data after receiving Server Hello, which not only negates the
+   benefit of 0-RTT, but also works under certain assumptions hold (e.g., the
+   same ciphersuite is selected in initial and resumption handshake) (#1146).
+
+** certtool: When signing a CSR, CRL distribution point (CDP) is no longer
+   copied from the signing CA by default (#1126).
+
+** libgnutls: The GNUTLS_NO_EXPLICIT_INIT envvar has been renamed to
+   GNUTLS_NO_IMPLICIT_INIT to reflect the purpose (#1178). The former is now
+   deprecated and will be removed in the future releases.
+
+** certtool: When producing certificates and certificate requests, subject DN
+   components that are provided individually will now be ordered by
+   assumed scale (e.g. Country before State, Organization before
+   OrganizationalUnit).  This change also affects the order in which
+   certtool prompts interactively.  Please rely on the template
+   mechanism for automated use of certtool! (#1243)
+
+** API and ABI modifications:
+gnutls_early_cipher_get: Added
+gnutls_early_prf_hash_get: Added
+
+** guile: Writes to a session record port no longer throw an exception upon
+   GNUTLS_E_AGAIN or GNUTLS_E_INTERRUPTED.
+
+* Version 3.7.1 (released 2021-03-10)
+
+** libgnutls: Fixed potential use-after-free in sending "key_share"
+   and "pre_shared_key" extensions. When sending those extensions, the
+   client may dereference a pointer no longer valid after
+   realloc. This happens only when the client sends a large Client
+   Hello message, e.g., when HRR is sent in a resumed session
+   previously negotiated large FFDHE parameters, because the initial
+   allocation of the buffer is large enough without having to call
+   realloc (#1151).  [GNUTLS-SA-2021-03-10, CVSS: low]
+
+** libgnutls: Fixed a regression in handling duplicated certs in a
+   chain (#1131).
+
+** libgnutls: Fixed sending of session ID in TLS 1.3 middlebox
+   compatibiltiy mode. In that mode the client shall always send a
+   non-zero session ID to make the handshake resemble the TLS 1.2
+   resumption; this was not true in the previous versions (#1074).
+
+** libgnutls: W32 performance improvement with a new sendmsg()-like
+   transport implementation (!1377).
+
+** libgnutls: Removed dependency on the external 'fipscheck' package,
+   when compiled with --enable-fips140-mode (#1101).
+
+** libgnutls: Added padlock acceleration for AES-192-CBC (#1004).
+
+** API and ABI modifications:
+No changes since last version.
+
+* Version 3.7.0 (released 2020-12-02)
+
+** libgnutls: Depend on nettle 3.6 (!1322).
+
+** libgnutls: Added a new API that provides a callback function to
+   retrieve missing certificates from incomplete certificate chains
+   (#202, #968, #1100).
+
+** libgnutls: Added a new API that provides a callback function to
+   output the complete path to the trusted root during certificate
+   chain verification (#1012).
+
+** libgnutls: OIDs exposed as gnutls_datum_t no longer account for the
+   terminating null bytes, while the data field is null terminated.
+   The affected API functions are: gnutls_ocsp_req_get_extension,
+   gnutls_ocsp_resp_get_response, and gnutls_ocsp_resp_get_extension
+   (#805).
+
+** libgnutls: Added a new set of API to enable QUIC implementation (#826, #849,
+   #850).
+
+** libgnutls: The crypto implementation override APIs deprecated in 3.6.9 are
+   now no-op (#790).
+
+** libgnutls: Added MAGMA/KUZNYECHIK CTR-ACPKM and CMAC support (!1161).
+
+** libgnutls: Support for padlock has been fixed to make it work with Zhaoxin
+   CPU (#1079).
+
+** libgnutls: The maximum PIN length for PKCS #11 has been increased from 31
+   bytes to 255 bytes (#932).
+
+** API and ABI modifications:
+gnutls_x509_trust_list_set_getissuer_function: Added
+gnutls_x509_trust_list_get_ptr: Added
+gnutls_x509_trust_list_set_ptr: Added
+gnutls_session_set_verify_output_function: Added
+gnutls_record_encryption_level_t: New enum
+gnutls_handshake_read_func: New callback type
+gnutls_handshake_set_read_function: New function
+gnutls_handshake_write: New function
+gnutls_handshake_secret_func: New callback type
+gnutls_handshake_set_secret_function: New function
+gnutls_alert_read_func: New callback type
+gnutls_alert_set_read_function: New function
+gnutls_crypto_register_cipher: Deprecated; no-op
+gnutls_crypto_register_aead_cipher: Deprecated; no-op
+gnutls_crypto_register_mac: Deprecated; no-op
+gnutls_crypto_register_digest: Deprecated; no-op
+
+* Version 3.6.15 (releases 2020-09-04)
+
+** libgnutls: Fixed "no_renegotiation" alert handling at incorrect timing.
+   The server sending a "no_renegotiation" alert in an unexpected timing,
+   followed by an invalid second handshake was able to cause a TLS 1.3 client to
+   crash via a null-pointer dereference. The crash happens in the application's
+   error handling path, where the gnutls_deinit function is called after
+   detecting a handshake failure (#1071).  [GNUTLS-SA-2020-09-04, CVSS: medium]
+
+** libgnutls: If FIPS self-tests are failed, gnutls_fips140_mode_enabled() now
+   indicates that with a false return value (!1306).
+
+** libgnutls: Under FIPS mode, the generated ECDH/DH public keys are checked
+   accordingly to SP800-56A rev 3 (!1295, !1299).
+
+** libgnutls: gnutls_x509_crt_export2() now returns 0 upon success, rather than
+   the size of the internal base64 blob (#1025). The new behavior aligns to the
+   existing documentation.
+
+** libgnutls: Certificate verification failue due to OCSP must-stapling is not
+   honered is now correctly marked with the GNUTLS_CERT_INVALID flag
+   (!1317). The new behavior aligns to the existing documentation.
+
+** libgnutls: The audit log message for weak hashes is no longer printed twice
+   (!1301).
+
+** libgnutls: Fixed version negotiation when TLS 1.3 is enabled and TLS 1.2 is
+   disabled in the priority string. Previously, even when TLS 1.2 is explicitly
+   disabled with "-VERS-TLS1.2", the server still offered TLS 1.2 if TLS 1.3 is
+   enabled (#1054).
+
+** API and ABI modifications:
+No changes since last version.
+
+* Version 3.6.14 (released 2020-06-03)
+
+** libgnutls: Fixed insecure session ticket key construction, since 3.6.4.
+   The TLS server would not bind the session ticket encryption key with a
+   value supplied by the application until the initial key rotation, allowing
+   attacker to bypass authentication in TLS 1.3 and recover previous
+   conversations in TLS 1.2 (#1011).
+   [GNUTLS-SA-2020-06-03, CVSS: high]
+
+** libgnutls: Fixed handling of certificate chain with cross-signed
+   intermediate CA certificates (#1008).
+
+** libgnutls: Fixed reception of empty session ticket under TLS 1.2 (#997).
+
+** libgnutls: gnutls_x509_crt_print() is enhanced to recognizes commonName
+   (2.5.4.3), decodes certificate policy OIDs (!1245), and prints Authority
+   Key Identifier (AKI) properly (#989, #991).
+
+** certtool: PKCS #7 attributes are now printed with symbolic names (!1246).
+
+** libgnutls: Added several improvements on Windows Vista and later releases
+   (!1257, !1254, !1256). Most notably the system random number generator now
+   uses Windows BCrypt* API if available (!1255).
+
+** libgnutls: Use accelerated AES-XTS implementation if possible (!1244).
+   Also both accelerated and non-accelerated implementations check key block
+   according to FIPS-140-2 IG A.9 (!1233).
+
+** libgnutls: Added support for AES-SIV ciphers (#463).
+
+** libgnutls: Added support for 192-bit AES-GCM cipher (!1267).
+
+** libgnutls: No longer use internal symbols exported from Nettle (!1235)
+
+** API and ABI modifications:
+GNUTLS_CIPHER_AES_128_SIV: Added
+GNUTLS_CIPHER_AES_256_SIV: Added
+GNUTLS_CIPHER_AES_192_GCM: Added
+GNUTLS_NO_AUTO_SEND_TICKET: Added
+gnutls_ext_get_name2: Added
+gnutls_pkcs7_print_signature_info: Added
+
+* Version 3.6.13 (released 2020-03-31)
+
+** libgnutls: Fix a DTLS-protocol regression (caused by TLS1.3 support), since 3.6.3.
+   The DTLS client would not contribute any randomness to the DTLS negotiation,
+   breaking the security guarantees of the DTLS protocol (#960)
+   [GNUTLS-SA-2020-03-31, CVSS: high]
+
+** libgnutls: Added new APIs to access KDF algorithms (#813).
+
+** libgnutls: Added new callback gnutls_keylog_func that enables a custom
+   logging functionality.
+
+** libgnutls: Added support for non-null terminated usernames in PSK
+   negotiation (#586).
+
+** gnutls-cli-debug: Improved support for old servers that only support
+   SSL 3.0.
+
+** API and ABI modifications:
+gnutls_hkdf_extract: Added
+gnutls_hkdf_expand: Added
+gnutls_pbkdf2: Added
+gnutls_session_get_keylog_function: Added
+gnutls_session_set_keylog_function: Added
+gnutls_prf_hash_get: Added
+gnutls_psk_server_get_username2: Added
+gnutls_psk_set_client_credentials2: Added
+gnutls_psk_set_client_credentials_function2: Added
+gnutls_psk_set_server_credentials_function2: Added
+
+
 * Version 3.6.12 (released 2020-02-01)
 
 ** libgnutls: Introduced TLS session flag (gnutls_session_get_flags())

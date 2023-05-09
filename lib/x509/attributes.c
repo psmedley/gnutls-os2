@@ -38,7 +38,7 @@
  * index here starts from one.
  */
 static int
-overwrite_attribute(ASN1_TYPE asn, const char *root, unsigned indx,
+overwrite_attribute(asn1_node asn, const char *root, unsigned indx,
 		    const gnutls_datum_t * ext_data)
 {
 	char name[MAX_NAME_SIZE], name2[MAX_NAME_SIZE];
@@ -70,7 +70,7 @@ overwrite_attribute(ASN1_TYPE asn, const char *root, unsigned indx,
  *
  */
 int
-_x509_parse_attribute(ASN1_TYPE asn1_struct,
+_x509_parse_attribute(asn1_node asn1_struct,
 		const char *attr_name, const char *given_oid, unsigned indx,
 		int raw, gnutls_datum_t * out)
 {
@@ -89,10 +89,10 @@ _x509_parse_attribute(ASN1_TYPE asn1_struct,
 		/* create a string like "attribute.?1"
 		 */
 		if (attr_name[0] != 0)
-			snprintf(tmpbuffer1, sizeof(tmpbuffer1), "%s.?%u",
+			snprintf(tmpbuffer1, sizeof(tmpbuffer1), "%s.?%d",
 				 attr_name, k1);
 		else
-			snprintf(tmpbuffer1, sizeof(tmpbuffer1), "?%u",
+			snprintf(tmpbuffer1, sizeof(tmpbuffer1), "?%d",
 				 k1);
 
 		len = sizeof(value) - 1;
@@ -185,7 +185,7 @@ _x509_parse_attribute(ASN1_TYPE asn1_struct,
  * Critical will be either 0 or 1.
  */
 static int
-add_attribute(ASN1_TYPE asn, const char *root, const char *attribute_id,
+add_attribute(asn1_node asn, const char *root, const char *attribute_id,
 	      const gnutls_datum_t * ext_data)
 {
 	int result;
@@ -230,7 +230,7 @@ add_attribute(ASN1_TYPE asn, const char *root, const char *attribute_id,
 
 
 int
-_x509_set_attribute(ASN1_TYPE asn, const char *root,
+_x509_set_attribute(asn1_node asn, const char *root,
 	      const char *ext_id, const gnutls_datum_t * ext_data)
 {
 	int result;
@@ -244,7 +244,7 @@ _x509_set_attribute(ASN1_TYPE asn, const char *root,
 	do {
 		k++;
 
-		snprintf(name, sizeof(name), "%s.?%u", root, k);
+		snprintf(name, sizeof(name), "%s.?%d", root, k);
 
 		len = sizeof(extnID) - 1;
 		result = asn1_read_value(asn, name, extnID, &len);

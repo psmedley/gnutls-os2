@@ -282,10 +282,60 @@ int cert_verify(gnutls_session_t session, const char *hostname, const char *purp
 
 	gnutls_free(out.data);
 
-	if (status)
+	if (status) {
+		if (!(status & GNUTLS_CERT_INVALID))
+			abort();
 		return 0;
+	}
 
 	return 1;
+}
+
+/* Parse input string and set certificate compression methods */
+int compress_cert_set_methods(gnutls_session_t session,
+			      const char **strings,
+			      size_t n_strings)
+{
+	int ret = 0;
+	gnutls_compression_method_t *methods;
+
+	if (n_strings == 0) {
+		return 0;
+	}
+
+/* GCC analyzer in 11.2 mishandles reallocarray/free */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wanalyzer-mismatching-deallocation"
+
+	methods = reallocarray(NULL, n_strings, sizeof(*methods));
+	if (!methods) {
+		fprintf(stderr, "Could not set certificate compression methods: %s\n",
+			gnutls_strerror(ret));
+		return GNUTLS_E_MEMORY_ERROR;
+	}
+
+	for (size_t i = 0; i < n_strings; ++i) {
+		methods[i] = gnutls_compression_get_id(strings[i]);
+		if (methods[i] == GNUTLS_COMP_UNKNOWN) {
+			fprintf(stderr, "Unknown compression method: %s\n",
+				strings[i]);
+			goto cleanup;
+		}
+	}
+
+	ret = gnutls_compress_certificate_set_methods(session, methods, n_strings);
+	if (ret < 0) {
+		fprintf(stderr, "Could not set certificate compression methods: %s\n",
+			gnutls_strerror(ret));
+		goto cleanup;
+	}
+
+cleanup:
+	free(methods);
+
+#pragma GCC diagnostic pop
+
+	return ret;
 }
 
 static void
@@ -390,6 +440,51 @@ static void print_ecdh_info(gnutls_session_t session, const char *str, int print
 	log_msg(stdout, " - Curve size: %d bits\n",
 	       gnutls_ecc_curve_get_size(curve) * 8);
 
+}
+
+struct channel_binding_request {
+	gnutls_channel_binding_t type;
+	const char *name;
+};
+
+static void print_channel_bindings(gnutls_session_t session, int print)
+{
+	static const struct channel_binding_request requests[] = {
+		{ GNUTLS_CB_TLS_UNIQUE, "tls-unique" },
+		{ GNUTLS_CB_TLS_SERVER_END_POINT, "tls-server-end-point" },
+		{ GNUTLS_CB_TLS_EXPORTER, "tls-exporter" }
+	};
+	size_t i;
+
+	if (!print) {
+		return;
+	}
+
+	log_msg(stdout, "- Channel bindings\n");
+	for (i = 0; i < sizeof(requests) / sizeof(requests[0]); i++) {
+		gnutls_datum_t cb;
+		int rc;
+
+		rc = gnutls_session_channel_binding(session,
+						    requests[i].type,
+						    &cb);
+		if (rc == GNUTLS_E_CHANNEL_BINDING_NOT_AVAILABLE) {
+			log_msg(stdout, " - '%s': not available\n",
+				requests[i].name);
+		} else if (rc < 0) {
+			fprintf(stderr, " - '%s': error: %s\n",
+				requests[i].name, gnutls_strerror(rc));
+		} else {
+			size_t j;
+
+			log_msg(stdout, " - '%s': ",
+				requests[i].name);
+			for (j = 0; j < cb.size; j++)
+				log_msg(stdout, "%02x", cb.data[j]);
+			log_msg(stdout, "\n");
+			gnutls_free(cb.data);
+		}
+	}
 }
 
 int print_info(gnutls_session_t session, int verbose, int flags)
@@ -549,25 +644,7 @@ int print_info(gnutls_session_t session, int verbose, int flags)
 		log_msg(stdout, "- Application protocol: %.*s\n", p.size, p.data);
 #endif
 
-	if (verbose) {
-		gnutls_datum_t cb;
-
-		rc = gnutls_session_channel_binding(session,
-						    GNUTLS_CB_TLS_UNIQUE,
-						    &cb);
-		if (rc)
-			fprintf(stderr, "Channel binding error: %s\n",
-				gnutls_strerror(rc));
-		else {
-			size_t i;
-
-			log_msg(stdout, "- Channel binding 'tls-unique': ");
-			for (i = 0; i < cb.size; i++)
-				log_msg(stdout, "%02x", cb.data[i]);
-			log_msg(stdout, "\n");
-			gnutls_free(cb.data);
-		}
-	}
+	print_channel_bindings(session, verbose);
 
 	fflush(stdout);
 
@@ -1138,6 +1215,15 @@ pin_callback(void *user, int attempt, const char *token_url,
 			getenv_copy(password, sizeof(password), "GNUTLS_PIN");
 	}
 
+	if (password[0] == 0 && info != NULL && info->password != NULL && info->ask_pass == 0) {
+		if (strlen(info->password) < sizeof(password)) {
+			strcpy(password, info->password);
+		} else {
+			memcpy(password, info->password, sizeof(password) - 1);
+			password[sizeof(password) - 1] = '\0';
+		}
+	}
+
 	if (password[0] == 0 && (info == NULL || info->batch == 0 || info->ask_pass != 0)) {
 		if (token_label && token_label[0] != 0) {
 			fprintf(stderr, "Token '%s' with URL '%s' ", token_label, token_url);
@@ -1253,6 +1339,8 @@ void log_set(FILE *file)
 	logfile = file;
 }
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-y2k"
 /* This is very similar to ctime() but it does not force a newline.
  */
 char *simple_ctime(const time_t *t, char out[SIMPLE_CTIME_BUF_SIZE])
@@ -1271,3 +1359,4 @@ char *simple_ctime(const time_t *t, char out[SIMPLE_CTIME_BUF_SIZE])
 	snprintf(out, SIMPLE_CTIME_BUF_SIZE, "[error]");
 	return out;
 }
+#pragma GCC diagnostic pop

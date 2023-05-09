@@ -316,14 +316,15 @@ proc_dhe_psk_client_kx(gnutls_session_t session, uint8_t * data,
 		return GNUTLS_E_ILLEGAL_SRP_USERNAME;
 	}
 
-	memcpy(info->username, username.data, username.size);
-	info->username[username.size] = 0;
+	ret = _gnutls_copy_psk_username(info, username);
+	if (ret < 0)
+		return gnutls_assert_val(ret);
 
 	/* Adjust the data */
 	data += username.size + 2;
 
 	ret =
-	    _gnutls_psk_pwd_find_entry(session, info->username, &psk_key);
+	    _gnutls_psk_pwd_find_entry(session, info->username, info->username_len, &psk_key);
 	if (ret < 0)
 		return gnutls_assert_val(ret);
 
@@ -383,8 +384,9 @@ proc_ecdhe_psk_client_kx(gnutls_session_t session, uint8_t * data,
 		return GNUTLS_E_ILLEGAL_SRP_USERNAME;
 	}
 
-	memcpy(info->username, username.data, username.size);
-	info->username[username.size] = 0;
+	ret = _gnutls_copy_psk_username(info, username);
+	if (ret < 0)
+		return gnutls_assert_val(ret);
 
 	/* Adjust the data */
 	data += username.size + 2;
@@ -392,7 +394,7 @@ proc_ecdhe_psk_client_kx(gnutls_session_t session, uint8_t * data,
 	/* should never fail. It will always return a key even if it is
 	 * a random one */
 	ret =
-	    _gnutls_psk_pwd_find_entry(session, info->username, &psk_key);
+	    _gnutls_psk_pwd_find_entry(session, info->username, info->username_len, &psk_key);
 	if (ret < 0)
 		return gnutls_assert_val(ret);
 
@@ -405,29 +407,6 @@ proc_ecdhe_psk_client_kx(gnutls_session_t session, uint8_t * data,
 	return ret;
 }
 
-static int copy_hint(gnutls_session_t session, gnutls_datum_t *hint)
-{
-	psk_auth_info_t info;
-
-	/* copy the hint to the auth info structures
-	 */
-	info = _gnutls_get_auth_info(session, GNUTLS_CRD_PSK);
-	if (info == NULL) {
-		gnutls_assert();
-		return GNUTLS_E_INTERNAL_ERROR;
-	}
-
-	if (hint->size > MAX_USERNAME_SIZE) {
-		gnutls_assert();
-		return GNUTLS_E_ILLEGAL_SRP_USERNAME;
-	}
-
-	memcpy(info->hint, hint->data, hint->size);
-	info->hint[hint->size] = 0;
-
-	return 0;
-}
-
 static int
 proc_dhe_psk_server_kx(gnutls_session_t session, uint8_t * data,
 		       size_t _data_size)
@@ -435,6 +414,7 @@ proc_dhe_psk_server_kx(gnutls_session_t session, uint8_t * data,
 
 	int ret;
 	ssize_t data_size = _data_size;
+	psk_auth_info_t info;
 	gnutls_datum_t hint;
 
 	/* set auth_info */
@@ -459,7 +439,14 @@ proc_dhe_psk_server_kx(gnutls_session_t session, uint8_t * data,
 		return ret;
 	}
 
-	ret = copy_hint(session, &hint);
+	info = _gnutls_get_auth_info(session, GNUTLS_CRD_PSK);
+	if (info == NULL)
+		return gnutls_assert_val(GNUTLS_E_INTERNAL_ERROR);
+
+	if (hint.size > MAX_USERNAME_SIZE)
+		return gnutls_assert_val(GNUTLS_E_ILLEGAL_SRP_USERNAME);
+
+	ret = _gnutls_copy_psk_hint(info, hint);
 	if (ret < 0) {
 		gnutls_assert();
 		return ret;
@@ -475,6 +462,7 @@ proc_ecdhe_psk_server_kx(gnutls_session_t session, uint8_t * data,
 
 	int ret;
 	ssize_t data_size = _data_size;
+	psk_auth_info_t info;
 	gnutls_datum_t hint;
 
 	/* set auth_info */
@@ -499,7 +487,14 @@ proc_ecdhe_psk_server_kx(gnutls_session_t session, uint8_t * data,
 		return ret;
 	}
 
-	ret = copy_hint(session, &hint);
+	info = _gnutls_get_auth_info(session, GNUTLS_CRD_PSK);
+	if (info == NULL)
+		return gnutls_assert_val(GNUTLS_E_INTERNAL_ERROR);
+
+	if (hint.size > MAX_USERNAME_SIZE)
+		return gnutls_assert_val(GNUTLS_E_ILLEGAL_SRP_USERNAME);
+
+	ret = _gnutls_copy_psk_hint(info, hint);
 	if (ret < 0) {
 		gnutls_assert();
 		return ret;

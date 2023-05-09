@@ -55,11 +55,11 @@
 #include <random.h>
 #include <dtls.h>
 #include "secrets.h"
+#include "tls13/early_data.h"
 #include "tls13/session_ticket.h"
 #include "locks.h"
+#include "system/ktls.h"
 
-#define TRUE 1
-#define FALSE 0
 
 static int check_if_null_comp_present(gnutls_session_t session,
 					     uint8_t * data, int datalen);
@@ -219,6 +219,8 @@ static int tls12_resume_copy_required_vals(gnutls_session_t session, unsigned ti
 
 void _gnutls_set_client_random(gnutls_session_t session, uint8_t * rnd)
 {
+	_gnutls_memory_mark_defined(session->security_parameters.client_random,
+				    GNUTLS_RANDOM_SIZE);
 	memcpy(session->security_parameters.client_random, rnd,
 	       GNUTLS_RANDOM_SIZE);
 }
@@ -230,16 +232,23 @@ int _gnutls_gen_client_random(gnutls_session_t session)
 
 	/* no random given, we generate. */
 	if (session->internals.sc_random_set != 0) {
+		_gnutls_memory_mark_defined(session->security_parameters.client_random,
+					    GNUTLS_RANDOM_SIZE);
 		memcpy(session->security_parameters.client_random,
 		       session->internals.
 		       resumed_security_parameters.client_random,
 		       GNUTLS_RANDOM_SIZE);
 	} else {
+		_gnutls_memory_mark_defined(session->security_parameters.client_random,
+					    GNUTLS_RANDOM_SIZE);
 		ret = gnutls_rnd(GNUTLS_RND_NONCE,
 			session->security_parameters.client_random,
 			GNUTLS_RANDOM_SIZE);
-		if (ret < 0)
+		if (ret < 0) {
+			_gnutls_memory_mark_undefined(session->security_parameters.client_random,
+						      GNUTLS_RANDOM_SIZE);
 			return gnutls_assert_val(ret);
+		}
 	}
 
 	return 0;
@@ -250,6 +259,8 @@ int _gnutls_set_server_random(gnutls_session_t session, const version_entry_st *
 {
 	const version_entry_st *max;
 
+	_gnutls_memory_mark_defined(session->security_parameters.server_random,
+				    GNUTLS_RANDOM_SIZE);
 	memcpy(session->security_parameters.server_random, rnd,
 	       GNUTLS_RANDOM_SIZE);
 
@@ -287,6 +298,8 @@ int _gnutls_gen_server_random(gnutls_session_t session, int version)
 	const version_entry_st *max;
 
 	if (session->internals.sc_random_set != 0) {
+		_gnutls_memory_mark_defined(session->security_parameters.server_random,
+					    GNUTLS_RANDOM_SIZE);
 		memcpy(session->security_parameters.server_random,
 		       session->internals.
 		       resumed_security_parameters.server_random,
@@ -297,6 +310,9 @@ int _gnutls_gen_server_random(gnutls_session_t session, int version)
 	max = _gnutls_version_max(session);
 	if (max == NULL)
 		return gnutls_assert_val(GNUTLS_E_NO_CIPHER_SUITES);
+
+	_gnutls_memory_mark_defined(session->security_parameters.server_random,
+				    GNUTLS_RANDOM_SIZE);
 
 	if (!IS_DTLS(session) && max->id >= GNUTLS_TLS1_3 &&
 	    version <= GNUTLS_TLS1_2) {
@@ -317,6 +333,8 @@ int _gnutls_gen_server_random(gnutls_session_t session, int version)
 
 	if (ret < 0) {
 		gnutls_assert();
+		_gnutls_memory_mark_undefined(session->security_parameters.server_random,
+					      GNUTLS_RANDOM_SIZE);
 		return ret;
 	}
 
@@ -425,10 +443,17 @@ _gnutls_finished(gnutls_session_t session, int type, void *ret,
 		mesg = CLIENT_MSG;
 	}
 
-	return _gnutls_PRF(session,
-			   session->security_parameters.master_secret,
-			   GNUTLS_MASTER_SIZE, mesg, siz, concat, hash_len,
-			   12, ret);
+	_gnutls_memory_mark_defined(session->security_parameters.master_secret,
+				    GNUTLS_MASTER_SIZE);
+	rc = _gnutls_PRF(session,
+			 session->security_parameters.master_secret,
+			 GNUTLS_MASTER_SIZE, mesg, siz, concat, hash_len,
+			 12, ret);
+	if (rc < 0) {
+		_gnutls_memory_mark_undefined(session->security_parameters.master_secret,
+					      GNUTLS_MASTER_SIZE);
+	}
+	return rc;
 }
 
 
@@ -517,7 +542,7 @@ _gnutls_user_hello_func(gnutls_session_t session,
 		 * server, and that includes switching version which we have already
 		 * negotiated; note that this doesn't apply when resuming as the version
 		 * negotiation is already complete. */
-		if (session->internals.resumed != RESUME_TRUE) {
+		if (!session->internals.resumed) {
 			new_max = _gnutls_version_max(session);
 			old_vers = get_version(session);
 
@@ -565,7 +590,7 @@ static int set_auth_types(gnutls_session_t session)
 		/* Under TLS1.3 this returns a KX which matches the negotiated
 		 * groups from the key shares; if we are resuming then the KX seen
 		 * here doesn't match the original session. */
-		if (session->internals.resumed == RESUME_FALSE)
+		if (!session->internals.resumed)
 			kx = gnutls_kx_get(session);
 		else
 			kx = GNUTLS_KX_UNKNOWN;
@@ -577,7 +602,7 @@ static int set_auth_types(gnutls_session_t session)
 	if (kx != GNUTLS_KX_UNKNOWN) {
 		session->security_parameters.server_auth_type = _gnutls_map_kx_get_cred(kx, 1);
 		session->security_parameters.client_auth_type = _gnutls_map_kx_get_cred(kx, 0);
-	} else if (unlikely(session->internals.resumed == RESUME_FALSE)) {
+	} else if (unlikely(!session->internals.resumed)) {
 		/* Here we can only arrive if something we received
 		 * prevented the session from completing. */
 		return gnutls_assert_val(GNUTLS_E_ILLEGAL_PARAMETER);
@@ -725,7 +750,7 @@ read_client_hello(gnutls_session_t session, uint8_t * data,
 			if (ret < 0)
 				return gnutls_assert_val(ret);
 
-			session->internals.resumed = RESUME_TRUE;
+			session->internals.resumed = true;
 
 			return _gnutls_user_hello_func(session, major, minor);
 		} else {
@@ -736,7 +761,7 @@ read_client_hello(gnutls_session_t session, uint8_t * data,
 			if (ret < 0)
 				return gnutls_assert_val(ret);
 
-			session->internals.resumed = RESUME_FALSE;
+			session->internals.resumed = false;
 		}
 	} else { /* TLS1.3 */
 		/* we echo client's session ID - length was checked previously */
@@ -776,8 +801,40 @@ read_client_hello(gnutls_session_t session, uint8_t * data,
 		return ret;
 	}
 
+	if (session->internals.hsk_flags & HSK_EARLY_DATA_ACCEPTED) {
+		const cipher_entry_st *ce;
+		const mac_entry_st *me;
+		record_parameters_st *params;
+
+		ce = cipher_to_entry(session->internals.
+				     resumed_security_parameters.
+				     cs->block_algorithm);
+		me = mac_to_entry(session->internals.
+				  resumed_security_parameters.
+				  cs->mac_algorithm);
+
+		ret = _gnutls_epoch_get(session, EPOCH_NEXT, &params);
+		if (ret < 0) {
+			return gnutls_assert_val(ret);
+		}
+
+		params->cipher = ce;
+		params->mac = me;
+
+		ret = _tls13_read_connection_state_init(session, STAGE_EARLY);
+		if (ret < 0) {
+			return gnutls_assert_val(ret);
+		}
+
+		_gnutls_epoch_bump(session);
+		ret = _gnutls_epoch_dup(session, EPOCH_READ_CURRENT);
+		if (ret < 0) {
+			return gnutls_assert_val(ret);
+		}
+	}
+
 	/* resumed by session_ticket extension */
-	if (!vers->tls13_sem && session->internals.resumed != RESUME_FALSE) {
+	if (!vers->tls13_sem && session->internals.resumed) {
 		session->internals.resumed_security_parameters.
 		    max_record_recv_size =
 		    session->security_parameters.max_record_recv_size;
@@ -808,7 +865,17 @@ read_client_hello(gnutls_session_t session, uint8_t * data,
 		return ret;
 	}
 
-	_gnutls_handshake_log("HSK[%p]: Selected version %s\n", session, session->security_parameters.pversion->name);
+	/* Only at this point we know the version we are actually going to use
+	 * ("supported_versions" extension is parsed, user_hello_func is called,
+	 * legacy version negotiation is done). */
+	vers = get_version(session);
+	if (unlikely(vers == NULL))
+		return gnutls_assert_val(GNUTLS_E_UNSUPPORTED_VERSION_PACKET);
+
+	if (_gnutls_version_priority(session, vers->id) < 0)
+		return gnutls_assert_val(GNUTLS_E_UNSUPPORTED_VERSION_PACKET);
+
+	_gnutls_handshake_log("HSK[%p]: Selected version %s\n", session, vers->name);
 
 	/* select appropriate compression method */
 	ret =
@@ -905,10 +972,10 @@ int _gnutls_send_finished(gnutls_session_t session, int again)
 			return ret;
 		}
 
-		if ((session->internals.resumed == RESUME_FALSE
+		if ((!session->internals.resumed
 		     && session->security_parameters.entity ==
 		     GNUTLS_CLIENT)
-		    || (session->internals.resumed != RESUME_FALSE
+		    || (session->internals.resumed
 			&& session->security_parameters.entity ==
 			GNUTLS_SERVER)) {
 			/* if we are a client not resuming - or we are a server resuming */
@@ -1009,9 +1076,9 @@ int _gnutls_recv_finished(gnutls_session_t session)
 		goto cleanup;
 	}
 
-	if ((session->internals.resumed != RESUME_FALSE
+	if ((session->internals.resumed
 	     && session->security_parameters.entity == GNUTLS_CLIENT)
-	    || (session->internals.resumed == RESUME_FALSE
+	    || (!session->internals.resumed
 		&& session->security_parameters.entity == GNUTLS_SERVER)) {
 		/* if we are a client resuming - or we are a server not resuming */
 		_gnutls_handshake_log
@@ -1342,6 +1409,7 @@ _gnutls_send_handshake2(gnutls_session_t session, mbuffer_st * bufel,
 		case GNUTLS_HANDSHAKE_ENCRYPTED_EXTENSIONS: /* followed by finished or cert */
 		case GNUTLS_HANDSHAKE_CERTIFICATE_REQUEST:  /* followed by certificate */
 		case GNUTLS_HANDSHAKE_CERTIFICATE_PKT:	/* this one is followed by cert verify */
+		case GNUTLS_HANDSHAKE_COMPRESSED_CERTIFICATE_PKT:	/* as above */
 		case GNUTLS_HANDSHAKE_CERTIFICATE_VERIFY: /* followed by finished */
 			ret = 0; /* cache */
 			break;
@@ -1356,6 +1424,7 @@ _gnutls_send_handshake2(gnutls_session_t session, mbuffer_st * bufel,
 		case GNUTLS_HANDSHAKE_CERTIFICATE_PKT:	/* this one is followed by ServerHelloDone
 							 * or ClientKeyExchange always.
 							 */
+		case GNUTLS_HANDSHAKE_COMPRESSED_CERTIFICATE_PKT:	/* as above */
 		case GNUTLS_HANDSHAKE_CERTIFICATE_STATUS:
 		case GNUTLS_HANDSHAKE_SERVER_KEY_EXCHANGE:	/* as above */
 		case GNUTLS_HANDSHAKE_SERVER_HELLO:	/* as above */
@@ -1659,6 +1728,7 @@ _gnutls_recv_handshake(gnutls_session_t session,
 		}
 		break;
 	case GNUTLS_HANDSHAKE_CERTIFICATE_PKT:
+	case GNUTLS_HANDSHAKE_COMPRESSED_CERTIFICATE_PKT:
 	case GNUTLS_HANDSHAKE_CERTIFICATE_STATUS:
 	case GNUTLS_HANDSHAKE_FINISHED:
 	case GNUTLS_HANDSHAKE_ENCRYPTED_EXTENSIONS:
@@ -1820,13 +1890,13 @@ client_check_if_resuming(gnutls_session_t session,
 			goto no_resume;
 		}
 
-		session->internals.resumed = RESUME_TRUE;	/* we are resuming */
+		session->internals.resumed = true;	/* we are resuming */
 
 		return 0;
 	} else {
 no_resume:
 		/* keep the new session id */
-		session->internals.resumed = RESUME_FALSE;	/* we are not resuming */
+		session->internals.resumed = false;	/* we are not resuming */
 		return -1;
 	}
 }
@@ -2036,6 +2106,8 @@ read_server_hello(gnutls_session_t session,
 	if (ret < 0)
 		return gnutls_assert_val(ret);
 
+	session->internals.hsk_flags |= HSK_SERVER_HELLO_RECEIVED;
+
 	return 0;
 }
 
@@ -2070,17 +2142,19 @@ static int send_client_hello(gnutls_session_t session, int again)
 	const version_entry_st *hver, *min_ver, *max_ver;
 	uint8_t tver[2];
 	gnutls_buffer_st extdata;
-	int rehandshake = 0;
+	bool rehandshake = false;
+	bool resuming = false;
 	unsigned add_sr_scsv = 0;
+	uint8_t *session_id =
+		session->internals.resumed_security_parameters.session_id;
 	uint8_t session_id_len =
-	    session->internals.resumed_security_parameters.session_id_size;
-
+		session->internals.resumed_security_parameters.session_id_size;
 
 	if (again == 0) {
 		/* note that rehandshake is different than resuming
 		 */
 		if (session->internals.initial_negotiation_completed)
-			rehandshake = 1;
+			rehandshake = true;
 
 		ret = _gnutls_buffer_init_handshake_mbuffer(&extdata);
 		if (ret < 0)
@@ -2097,6 +2171,8 @@ static int send_client_hello(gnutls_session_t session, int again)
 				hver = _gnutls_legacy_version_max(session);
 		} else {
 			/* we are resuming a session */
+			resuming = true;
+
 			hver =
 			    session->internals.resumed_security_parameters.
 			    pversion;
@@ -2149,7 +2225,7 @@ static int send_client_hello(gnutls_session_t session, int again)
 		}
 
 		if (session->internals.priorities->min_record_version != 0) {
-			/* Advertize the lowest supported (SSL 3.0) record packet
+			/* Advertise the lowest supported (SSL 3.0) record packet
 			 * version in record packets during the handshake.
 			 * That is to avoid confusing implementations
 			 * that do not support TLS 1.2 and don't know
@@ -2167,7 +2243,7 @@ static int send_client_hello(gnutls_session_t session, int again)
 		/* Generate random data
 		 */
 		if (!(session->internals.hsk_flags & HSK_HRR_RECEIVED) &&
-		    !(IS_DTLS(session) && session->internals.dtls.hsk_hello_verify_requests == 0)) {
+		    !(IS_DTLS(session) && session->internals.dtls.hsk_hello_verify_requests != 0)) {
 			ret = _gnutls_gen_client_random(session);
 			if (ret < 0) {
 				gnutls_assert();
@@ -2186,25 +2262,29 @@ static int send_client_hello(gnutls_session_t session, int again)
 
 #ifdef TLS13_APPENDIX_D4
 		if (max_ver->tls13_sem &&
-		    session->security_parameters.session_id_size == 0) {
-
-			/* Under TLS1.3 we generate a random session ID to make
-			 * the TLS1.3 session look like a resumed TLS1.2 session */
-			ret = _gnutls_generate_session_id(session->security_parameters.
-							  session_id,
-							  &session->security_parameters.
-							  session_id_size);
-			if (ret < 0) {
-				gnutls_assert();
-				goto cleanup;
+		    session->internals.priorities->tls13_compat_mode &&
+		    !resuming) {
+			if (!(session->internals.hsk_flags & HSK_HRR_RECEIVED)) {
+				/* Under TLS1.3 we generate a random session ID to make
+				 * the TLS1.3 session look like a resumed TLS1.2 session */
+				ret = _gnutls_generate_session_id(session->security_parameters.
+								  session_id,
+								  &session->security_parameters.
+								  session_id_size);
+				if (ret < 0) {
+					gnutls_assert();
+					goto cleanup;
+				}
 			}
+			session_id = session->security_parameters.session_id;
+			session_id_len = session->security_parameters.session_id_size;
 		}
 #endif
 
 		/* Copy the Session ID - if any
 		 */
 		ret = _gnutls_buffer_append_data_prefix(&extdata, 8,
-							session->internals.resumed_security_parameters.session_id,
+							session_id,
 							session_id_len);
 		if (ret < 0) {
 			gnutls_assert();
@@ -2276,6 +2356,43 @@ static int send_client_hello(gnutls_session_t session, int again)
 
 	ret = _gnutls_send_handshake(session, bufel,
 				     GNUTLS_HANDSHAKE_CLIENT_HELLO);
+
+	if (session->internals.hsk_flags & HSK_EARLY_DATA_IN_FLIGHT) {
+		const cipher_entry_st *ce;
+		const mac_entry_st *me;
+		record_parameters_st *params;
+
+		ce = cipher_to_entry(session->internals.
+				     resumed_security_parameters.
+				     cs->block_algorithm);
+		me = mac_to_entry(session->internals.
+				  resumed_security_parameters.
+				  cs->mac_algorithm);
+
+		ret = _gnutls_epoch_get(session, EPOCH_NEXT, &params);
+		if (ret < 0) {
+			return gnutls_assert_val(ret);
+		}
+
+		params->cipher = ce;
+		params->mac = me;
+
+		ret = _tls13_write_connection_state_init(session, STAGE_EARLY);
+		if (ret < 0) {
+			return gnutls_assert_val(ret);
+		}
+
+		_gnutls_epoch_bump(session);
+		ret = _gnutls_epoch_dup(session, EPOCH_WRITE_CURRENT);
+		if (ret < 0) {
+			return gnutls_assert_val(ret);
+		}
+
+		ret = _gnutls13_send_early_data(session);
+		if (ret < 0) {
+			return gnutls_assert_val(ret);
+		}
+	}
 
 	return ret;
 
@@ -2363,7 +2480,7 @@ int _gnutls_send_server_hello(gnutls_session_t session, int again)
 			goto fail;
 		}
 
-		if (!vers->tls13_sem && session->internals.resumed != RESUME_FALSE)
+		if (!vers->tls13_sem && session->internals.resumed)
 			etype = GNUTLS_EXT_MANDATORY;
 		else
 			etype = GNUTLS_EXT_ANY;
@@ -2560,16 +2677,42 @@ int gnutls_rehandshake(gnutls_session_t session)
 	return 0;
 }
 
+/* This function checks whether the error code should be treated fatal
+ * or not, and also does the necessary state transition.  In
+ * particular, in the case of a rehandshake abort it resets the
+ * handshake's internal state.
+ */
 inline static int
 _gnutls_abort_handshake(gnutls_session_t session, int ret)
 {
-	if (((ret == GNUTLS_E_WARNING_ALERT_RECEIVED) &&
-	     (gnutls_alert_get(session) == GNUTLS_A_NO_RENEGOTIATION))
-	    || ret == GNUTLS_E_GOT_APPLICATION_DATA)
-		return 0;
+	switch (ret) {
+	case GNUTLS_E_WARNING_ALERT_RECEIVED:
+		if (gnutls_alert_get(session) == GNUTLS_A_NO_RENEGOTIATION) {
+			/* The server always toleretes a "no_renegotiation" alert. */
+			if (session->security_parameters.entity == GNUTLS_SERVER) {
+				STATE = STATE0;
+				return ret;
+			}
 
-	/* this doesn't matter */
-	return GNUTLS_E_INTERNAL_ERROR;
+			/* The client should tolerete a "no_renegotiation" alert only if:
+			 * - the initial handshake has completed, or
+			 * - a Server Hello is not yet received
+			 */
+			if (session->internals.initial_negotiation_completed ||
+			    !(session->internals.hsk_flags & HSK_SERVER_HELLO_RECEIVED)) {
+				STATE = STATE0;
+				return ret;
+			}
+
+			return gnutls_assert_val(GNUTLS_E_UNEXPECTED_PACKET);
+		}
+		return ret;
+	case GNUTLS_E_GOT_APPLICATION_DATA:
+		STATE = STATE0;
+		return ret;
+	default:
+		return ret;
+	}
 }
 
 
@@ -2715,6 +2858,20 @@ int gnutls_handshake(gnutls_session_t session)
 			end->tv_nsec =
 				(start->tv_nsec + tmo_ms * 1000000LL) % 1000000000LL;
 		}
+
+#ifdef ENABLE_KTLS
+		if (_gnutls_config_is_ktls_enabled()) {
+			if ((session->internals.pull_func &&
+				session->internals.pull_func != system_read) ||
+			    session->internals.push_func) {
+				_gnutls_audit_log(session,
+						  "Not enabling KTLS with "
+						  "custom pull/push function\n");
+			} else {
+				_gnutls_ktls_enable(session);
+			}
+		}
+#endif
 	}
 
 	if (session->internals.recv_state == RECV_STATE_FALSE_START) {
@@ -2731,13 +2888,7 @@ int gnutls_handshake(gnutls_session_t session)
 	}
 
 	if (ret < 0) {
-		/* In the case of a rehandshake abort
-		 * we should reset the handshake's internal state.
-		 */
-		if (_gnutls_abort_handshake(session, ret) == 0)
-			STATE = STATE0;
-
-		return ret;
+		return _gnutls_abort_handshake(session, ret);
 	}
 
 	/* clear handshake buffer */
@@ -2770,6 +2921,12 @@ int gnutls_handshake(gnutls_session_t session)
 			session->internals.ertt = timespec_sub_ms(&handshake_finish_time, &session->internals.handshake_start_time)/4;
 		}
 	}
+
+#ifdef ENABLE_KTLS
+	if (IS_KTLS_ENABLED(session, GNUTLS_KTLS_DUPLEX)) {
+		_gnutls_ktls_set_keys(session);
+	}
+#endif
 
 	return 0;
 }
@@ -2952,7 +3109,7 @@ static int handshake_client(gnutls_session_t session)
 		FALLTHROUGH;
 	case STATE6:
 		/* RECV CERTIFICATE */
-		if (session->internals.resumed == RESUME_FALSE)	/* if we are not resuming */
+		if (!session->internals.resumed)	/* if we are not resuming */
 			ret = _gnutls_recv_server_certificate(session);
 		STATE = STATE6;
 		IMED_RET("recv server certificate", ret, 1);
@@ -2960,7 +3117,7 @@ static int handshake_client(gnutls_session_t session)
 	case STATE7:
 #ifdef ENABLE_OCSP
 		/* RECV CERTIFICATE STATUS */
-		if (session->internals.resumed == RESUME_FALSE)	/* if we are not resuming */
+		if (!session->internals.resumed)	/* if we are not resuming */
 			ret =
 			    _gnutls_recv_server_certificate_status
 			    (session);
@@ -2977,7 +3134,7 @@ static int handshake_client(gnutls_session_t session)
 		FALLTHROUGH;
 	case STATE9:
 		/* receive the server key exchange */
-		if (session->internals.resumed == RESUME_FALSE)	/* if we are not resuming */
+		if (!session->internals.resumed)	/* if we are not resuming */
 			ret = _gnutls_recv_server_kx_message(session);
 		STATE = STATE9;
 		IMED_RET("recv server kx message", ret, 1);
@@ -2986,7 +3143,7 @@ static int handshake_client(gnutls_session_t session)
 		/* receive the server certificate request - if any
 		 */
 
-		if (session->internals.resumed == RESUME_FALSE)	/* if we are not resuming */
+		if (!session->internals.resumed)	/* if we are not resuming */
 			ret = _gnutls_recv_server_crt_request(session);
 		STATE = STATE10;
 		IMED_RET("recv server certificate request message", ret,
@@ -2994,7 +3151,7 @@ static int handshake_client(gnutls_session_t session)
 		FALLTHROUGH;
 	case STATE11:
 		/* receive the server hello done */
-		if (session->internals.resumed == RESUME_FALSE)	/* if we are not resuming */
+		if (!session->internals.resumed)	/* if we are not resuming */
 			ret =
 			    _gnutls_recv_handshake(session,
 						   GNUTLS_HANDSHAKE_SERVER_HELLO_DONE,
@@ -3014,7 +3171,7 @@ static int handshake_client(gnutls_session_t session)
 	case STATE13:
 		/* send our certificate - if any and if requested
 		 */
-		if (session->internals.resumed == RESUME_FALSE)	/* if we are not resuming */
+		if (!session->internals.resumed)	/* if we are not resuming */
 			ret =
 			    _gnutls_send_client_certificate(session,
 							    AGAIN
@@ -3023,7 +3180,7 @@ static int handshake_client(gnutls_session_t session)
 		IMED_RET("send client certificate", ret, 0);
 		FALLTHROUGH;
 	case STATE14:
-		if (session->internals.resumed == RESUME_FALSE)	/* if we are not resuming */
+		if (!session->internals.resumed)	/* if we are not resuming */
 			ret =
 			    _gnutls_send_client_kx_message(session,
 							   AGAIN(STATE14));
@@ -3032,7 +3189,7 @@ static int handshake_client(gnutls_session_t session)
 		FALLTHROUGH;
 	case STATE15:
 		/* send client certificate verify */
-		if (session->internals.resumed == RESUME_FALSE)	/* if we are not resuming */
+		if (!session->internals.resumed)	/* if we are not resuming */
 			ret =
 			    _gnutls_send_client_certificate_verify(session,
 								   AGAIN
@@ -3042,8 +3199,8 @@ static int handshake_client(gnutls_session_t session)
 		FALLTHROUGH;
 	case STATE16:
 		STATE = STATE16;
-		if (session->internals.resumed == RESUME_FALSE) {
-			ret = send_handshake_final(session, TRUE);
+		if (!session->internals.resumed) {
+			ret = send_handshake_final(session, true);
 			IMED_RET("send handshake final 2", ret, 1);
 		} else {
 			ret = _gnutls_recv_new_session_ticket(session);
@@ -3053,7 +3210,7 @@ static int handshake_client(gnutls_session_t session)
 		FALLTHROUGH;
 	case STATE17:
 		STATE = STATE17;
-		if (session->internals.resumed == RESUME_FALSE && (session->internals.flags & GNUTLS_ENABLE_FALSE_START) && can_send_false_start(session)) {
+		if (!session->internals.resumed && (session->internals.flags & GNUTLS_ENABLE_FALSE_START) && can_send_false_start(session)) {
 			session->internals.hsk_flags |= HSK_FALSE_START_USED;
 			session->internals.recv_state = RECV_STATE_FALSE_START;
 			/* complete this phase of the handshake. We
@@ -3068,22 +3225,22 @@ static int handshake_client(gnutls_session_t session)
 	case STATE18:
 		STATE = STATE18;
 
-		if (session->internals.resumed == RESUME_FALSE) {
+		if (!session->internals.resumed) {
 			ret = _gnutls_recv_new_session_ticket(session);
 			IMED_RET("recv handshake new session ticket", ret,
 				 1);
 		} else {
-			ret = recv_handshake_final(session, TRUE);
+			ret = recv_handshake_final(session, true);
 			IMED_RET("recv handshake final", ret, 1);
 		}
 		FALLTHROUGH;
 	case STATE19:
 		STATE = STATE19;
-		if (session->internals.resumed == RESUME_FALSE) {
-			ret = recv_handshake_final(session, FALSE);
+		if (!session->internals.resumed) {
+			ret = recv_handshake_final(session, false);
 			IMED_RET("recv handshake final 2", ret, 1);
 		} else {
-			ret = send_handshake_final(session, FALSE);
+			ret = send_handshake_final(session, false);
 			IMED_RET("send handshake final", ret, 1);
 		}
 
@@ -3195,7 +3352,7 @@ static int send_handshake_final(gnutls_session_t session, int init)
 		}
 		/* Initialize the connection session (start encryption) - in case of client
 		 */
-		if (init == TRUE) {
+		if (init) {
 			ret = _gnutls_connection_state_init(session);
 			if (ret < 0) {
 				gnutls_assert();
@@ -3280,7 +3437,7 @@ static int recv_handshake_final(gnutls_session_t session, int init)
 			session->internals.dtls.hsk_read_seq++;
 
 		/* Initialize the connection session (start encryption) - in case of server */
-		if (init == TRUE) {
+		if (init) {
 			ret = _gnutls_connection_state_init(session);
 			if (ret < 0) {
 				gnutls_assert();
@@ -3388,7 +3545,7 @@ static int handshake_server(gnutls_session_t session)
 	case STATE5:
 		/* NOTE: these should not be send if we are resuming */
 
-		if (session->internals.resumed == RESUME_FALSE)
+		if (!session->internals.resumed)
 			ret =
 			    _gnutls_send_server_certificate(session,
 							    AGAIN(STATE5));
@@ -3397,7 +3554,7 @@ static int handshake_server(gnutls_session_t session)
 		FALLTHROUGH;
 	case STATE6:
 #ifdef ENABLE_OCSP
-		if (session->internals.resumed == RESUME_FALSE)
+		if (!session->internals.resumed)
 			ret =
 			    _gnutls_send_server_certificate_status(session,
 								   AGAIN
@@ -3408,7 +3565,7 @@ static int handshake_server(gnutls_session_t session)
 		FALLTHROUGH;
 	case STATE7:
 		/* send server key exchange (A) */
-		if (session->internals.resumed == RESUME_FALSE)
+		if (!session->internals.resumed)
 			ret =
 			    _gnutls_send_server_kx_message(session,
 							   AGAIN(STATE7));
@@ -3417,7 +3574,7 @@ static int handshake_server(gnutls_session_t session)
 		FALLTHROUGH;
 	case STATE8:
 		/* Send certificate request - if requested to */
-		if (session->internals.resumed == RESUME_FALSE)
+		if (!session->internals.resumed)
 			ret =
 			    _gnutls_send_server_crt_request(session,
 							    AGAIN(STATE8));
@@ -3426,7 +3583,7 @@ static int handshake_server(gnutls_session_t session)
 		FALLTHROUGH;
 	case STATE9:
 		/* send the server hello done */
-		if (session->internals.resumed == RESUME_FALSE)	/* if we are not resuming */
+		if (!session->internals.resumed)	/* if we are not resuming */
 			ret =
 			    _gnutls_send_empty_handshake(session,
 							 GNUTLS_HANDSHAKE_SERVER_HELLO_DONE,
@@ -3444,7 +3601,7 @@ static int handshake_server(gnutls_session_t session)
 		FALLTHROUGH;
 	case STATE11:
 		/* receive the client certificate message */
-		if (session->internals.resumed == RESUME_FALSE)	/* if we are not resuming */
+		if (!session->internals.resumed)	/* if we are not resuming */
 			ret = _gnutls_recv_client_certificate(session);
 		STATE = STATE11;
 		IMED_RET("recv client certificate", ret, 1);
@@ -3457,14 +3614,14 @@ static int handshake_server(gnutls_session_t session)
 		FALLTHROUGH;
 	case STATE13:
 		/* receive the client key exchange message */
-		if (session->internals.resumed == RESUME_FALSE)	/* if we are not resuming */
+		if (!session->internals.resumed)	/* if we are not resuming */
 			ret = _gnutls_recv_client_kx_message(session);
 		STATE = STATE13;
 		IMED_RET("recv client kx", ret, 1);
 		FALLTHROUGH;
 	case STATE14:
 		/* receive the client certificate verify message */
-		if (session->internals.resumed == RESUME_FALSE)	/* if we are not resuming */
+		if (!session->internals.resumed)	/* if we are not resuming */
 			ret =
 			    _gnutls_recv_client_certificate_verify_message
 			    (session);
@@ -3473,11 +3630,11 @@ static int handshake_server(gnutls_session_t session)
 		FALLTHROUGH;
 	case STATE15:
 		STATE = STATE15;
-		if (session->internals.resumed == RESUME_FALSE) {	/* if we are not resuming */
-			ret = recv_handshake_final(session, TRUE);
+		if (!session->internals.resumed) {	/* if we are not resuming */
+			ret = recv_handshake_final(session, true);
 			IMED_RET("recv handshake final", ret, 1);
 		} else {
-			ret = send_handshake_final(session, TRUE);
+			ret = send_handshake_final(session, true);
 			IMED_RET("send handshake final 2", ret, 1);
 		}
 		FALLTHROUGH;
@@ -3490,8 +3647,8 @@ static int handshake_server(gnutls_session_t session)
 		FALLTHROUGH;
 	case STATE17:
 		STATE = STATE17;
-		if (session->internals.resumed == RESUME_FALSE) {	/* if we are not resuming */
-			ret = send_handshake_final(session, FALSE);
+		if (!session->internals.resumed) {	/* if we are not resuming */
+			ret = send_handshake_final(session, false);
 			IMED_RET("send handshake final", ret, 1);
 
 			if (session->security_parameters.entity ==
@@ -3502,7 +3659,7 @@ static int handshake_server(gnutls_session_t session)
 				    (session);
 			}
 		} else {
-			ret = recv_handshake_final(session, FALSE);
+			ret = recv_handshake_final(session, false);
 			IMED_RET("recv handshake final 2", ret, 1);
 		}
 

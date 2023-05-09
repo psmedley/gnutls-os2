@@ -104,7 +104,7 @@ _gnutls13_handshake_verify_data(gnutls_session_t session,
 		goto cleanup;
 	}
 
-	ret = gnutls_hash_fast(session->security_parameters.prf->id,
+	ret = gnutls_hash_fast(MAC_TO_DIG(session->security_parameters.prf->id),
 			       session->internals.handshake_hash_buffer.data,
 			       session->internals.handshake_hash_buffer_prev_len,
 			       prefix);
@@ -122,12 +122,9 @@ _gnutls13_handshake_verify_data(gnutls_session_t session,
 	p.data = buf.data;
 	p.size = buf.length;
 
-	/* Here we intentionally enable flag GNUTLS_VERIFY_ALLOW_BROKEN
-	 * because we have checked whether the currently used signature
-	 * algorithm is allowed in the session. */
-	ret = gnutls_pubkey_verify_data2(cert->pubkey, se->id,
-					 verify_flags|GNUTLS_VERIFY_ALLOW_BROKEN,
-					 &p, signature);
+	verify_flags |= GNUTLS_VERIFY_RSA_PSS_FIXED_SALT_LENGTH;
+	ret = gnutls_pubkey_verify_data2(cert->pubkey, se->id, verify_flags, &p,
+					 signature);
 	if (ret < 0) {
 		gnutls_assert();
 		goto cleanup;
@@ -186,7 +183,7 @@ _gnutls13_handshake_sign_data(gnutls_session_t session,
 		goto cleanup;
 	}
 
-	ret = gnutls_hash_fast(session->security_parameters.prf->id,
+	ret = gnutls_hash_fast(MAC_TO_DIG(session->security_parameters.prf->id),
 			       session->internals.handshake_hash_buffer.data,
 			       session->internals.handshake_hash_buffer.length,
 			       tmp);
@@ -204,7 +201,9 @@ _gnutls13_handshake_sign_data(gnutls_session_t session,
 	p.data = buf.data;
 	p.size = buf.length;
 
-	ret = gnutls_privkey_sign_data2(pkey, se->id, 0, &p, signature);
+	ret = gnutls_privkey_sign_data2(pkey, se->id,
+					GNUTLS_PRIVKEY_FLAG_RSA_PSS_FIXED_SALT_LENGTH,
+					&p, signature);
 	if (ret < 0) {
 		gnutls_assert();
 		goto cleanup;
